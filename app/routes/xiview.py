@@ -200,6 +200,13 @@ async def get_results_metadata(cur, ids):
     cur.execute(query, [ids])
     metadata["spectrum_identification_protocols"] = cur.fetchall()
 
+    # spectradata for each id
+    query = """SELECT *
+            FROM spectradata sd
+            WHERE sd.upload_id = ANY(%s);"""
+    cur.execute(query, [ids])
+    metadata["spectra_data"] = cur.fetchall()
+
     # enzymes
     query = """SELECT *
             FROM enzyme e
@@ -237,8 +244,8 @@ SELECT si.id AS id, si.pep1_id AS pi1, si.pep2_id AS pi2,
                 si.rank AS r,
                 si.sip_id AS sip                
             FROM match si 
-            INNER JOIN submodpep mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id 
-            INNER JOIN submodpep mp2 ON si.pep2_id = mp2.id AND si.upload_id = mp2.upload_id
+            INNER JOIN submodpep mp1 ON si.upload_id = mp1.upload_id AND si.pep1_id = mp1.id 
+            INNER JOIN submodpep mp2 ON si.upload_id = mp2.upload_id AND si.pep2_id = mp2.id 
             WHERE si.upload_id = ANY(%s) 
             AND si.pass_threshold = TRUE 
             AND mp1.link_site1 > -1
@@ -475,7 +482,7 @@ async def get_xiview_peptides2(project, file=None):
 @log_execution_time_async
 async def get_peptides2(cur, ids):
     query = """with submatch as (select pep1_id, pep2_id, upload_id from match where upload_id = ANY(%s) and pass_threshold = true), 
-pep_ids as (select pep1_id, upload_id from submatch  union select pep2_id, upload_id from submatch),
+pep_ids as (select upload_id, pep1_id from submatch  union select upload_id, pep2_id from submatch),
 subpp AS (select * from peptideevidence WHERE upload_id = ANY(%s))
 select mp.id,
                 cast(mp.upload_id as text) AS u_id,
@@ -491,7 +498,7 @@ select mp.id,
                 mp.crosslinker_modmass as cl_m from pep_ids pi
 inner join modifiedpeptide mp on mp.upload_id = pi.upload_id and pi.pep1_id = mp.id
                     JOIN subpp AS pp
-                    ON mp.id = pp.peptide_id AND mp.upload_id = pp.upload_id
+                    ON mp.upload_id = pp.upload_id AND mp.id = pp.peptide_id 
                     GROUP BY mp.id, mp.upload_id, mp.base_sequence;"""
 
     cur.execute(query, [ids, ids])
