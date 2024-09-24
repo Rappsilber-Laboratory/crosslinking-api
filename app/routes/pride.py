@@ -3,6 +3,7 @@ import json
 import logging
 import logging.config
 import os
+import time
 from math import ceil
 from typing import List, Annotated, Union
 
@@ -13,8 +14,10 @@ from fastapi import HTTPException, Security
 from models.upload import Upload
 from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
+import typing as t
 
-from models.analysiscollection import AnalysisCollection
+# my ide gives warning for import from models, is something missing from top __init__.py in xi-mzidentml-converter
+from models.analysiscollectionspectrumidentification import AnalysisCollectionSpectrumIdentification
 from models.dbsequence import DBSequence
 from models.enzyme import Enzyme
 from models.modifiedpeptide import ModifiedPeptide
@@ -23,8 +26,10 @@ from models.projectdetail import ProjectDetail
 from models.projectsubdetail import ProjectSubDetail
 from models.searchmodification import SearchModification
 from models.spectrum import Spectrum
-from models.spectrumidentification import SpectrumIdentification
+from models.spectradata import SpectraData
+from models.match import Match
 from models.spectrumidentificationprotocol import SpectrumIdentificationProtocol
+
 from app.routes.shared import get_api_key
 from db_config_parser import redis_config
 from index import get_session
@@ -33,6 +38,24 @@ from process_dataset import convert_pxd_accession_from_pride
 logger = logging.getLogger(__name__)
 pride_router = APIRouter()
 config = configparser.ConfigParser()
+
+
+class EndpointFilter(logging.Filter):
+    def __init__(
+        self,
+        path: str,
+        *args: t.Any,
+        **kwargs: t.Any,
+    ):
+        super().__init__(*args, **kwargs)
+        self._path = path
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.getMessage().find(self._path) == -1
+
+
+# Filter out /endpoint
+logging.getLogger("uvicorn.access").addFilter(EndpointFilter(path="/health"))
 
 
 @pride_router.get("/health", tags=["Admin"])
@@ -61,6 +84,11 @@ async def health(session: Session = Depends(get_session)):
             'db_status': db_status}
 
 
+@pride_router.get("/test_time")
+async def test_time():
+    time.sleep(65)
+    return 1
+
 @pride_router.post("/parse", tags=["Admin"])
 async def parse(px_accession: str, temp_dir: str | None = None, dont_delete: bool = False,
                 api_key: str = Security(get_api_key)):
@@ -87,7 +115,7 @@ async def update_metadata_by_project(project_id: str, session: Session = Depends
     # Get total number of identifications (not spectra) passing Threshold including decoy identification
     sql_number_of_identifications = text("""
                         SELECT count(*)
-                        FROM spectrumidentification
+                        FROM match
                         WHERE upload_id IN (
                             SELECT u.id
                             FROM upload u
@@ -106,7 +134,7 @@ async def update_metadata_by_project(project_id: str, session: Session = Depends
                                 SELECT COUNT(DISTINCT pep_id)
                                 FROM (
                                     SELECT pep1_id AS pep_id
-                                    FROM spectrumidentification si
+                                    FROM match si
                                     WHERE si.upload_id IN (
                                             SELECT u.id
                                             FROM upload u
@@ -120,7 +148,7 @@ async def update_metadata_by_project(project_id: str, session: Session = Depends
                                     UNION
 
                                     SELECT pep2_id AS pep_id
-                                    FROM spectrumidentification si
+                                    FROM match si
                                     WHERE si.upload_id IN (
                                             SELECT u.id
                                             FROM upload u
@@ -139,12 +167,12 @@ async def update_metadata_by_project(project_id: str, session: Session = Depends
                             FROM (
                                 SELECT DISTINCT dbs.accession 
                                 FROM (
-                                    SELECT pe1.dbsequence_ref AS protein_id
-                                    FROM spectrumidentification si
+                                    SELECT pe1.dbsequence_id AS protein_id
+                                    FROM match si
                                     INNER JOIN modifiedpeptide mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id
-                                    INNER JOIN peptideevidence pe1 ON mp1.id = pe1.peptide_ref AND mp1.upload_id = pe1.upload_id
+                                    INNER JOIN peptideevidence pe1 ON mp1.id = pe1.peptide_id AND mp1.upload_id = pe1.upload_id
                                     INNER JOIN modifiedpeptide mp2 ON si.pep2_id = mp2.id AND si.upload_id = mp2.upload_id
-                                    INNER JOIN peptideevidence pe2 ON mp2.id = pe2.peptide_ref AND mp2.upload_id = pe2.upload_id
+                                    INNER JOIN peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id
                                     INNER JOIN upload u ON u.id = si.upload_id
                                     WHERE u.id IN (
                                         SELECT u.id
@@ -160,12 +188,12 @@ async def update_metadata_by_project(project_id: str, session: Session = Depends
 
                                     UNION
 
-                                    SELECT pe2.dbsequence_ref AS protein_id
-                                    FROM spectrumidentification si
+                                    SELECT pe2.dbsequence_id AS protein_id
+                                    FROM match si
                                     INNER JOIN modifiedpeptide mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id
-                                    INNER JOIN peptideevidence pe1 ON mp1.id = pe1.peptide_ref AND mp1.upload_id = pe1.upload_id
+                                    INNER JOIN peptideevidence pe1 ON mp1.id = pe1.peptide_id AND mp1.upload_id = pe1.upload_id
                                     INNER JOIN modifiedpeptide mp2 ON si.pep2_id = mp2.id AND si.upload_id = mp2.upload_id
-                                    INNER JOIN peptideevidence pe2 ON mp2.id = pe2.peptide_ref AND mp2.upload_id = pe2.upload_id
+                                    INNER JOIN peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id
                                     INNER JOIN upload u ON u.id = si.upload_id
                                     WHERE u.id IN (
                                         SELECT u.id
@@ -188,16 +216,16 @@ async def update_metadata_by_project(project_id: str, session: Session = Depends
     sql_peptides_per_protein = text("""
         WITH result AS (
         SELECT
-            pe1.dbsequence_ref AS dbref1,
-            pe1.peptide_ref AS pepref1,
-            pe2.dbsequence_ref AS dbref2,
-            pe2.peptide_ref AS pepref2
+            pe1.dbsequence_id AS dbref1,
+            pe1.peptide_id AS pepref1,
+            pe2.dbsequence_id AS dbref2,
+            pe2.peptide_id AS pepref2
         FROM
-            spectrumidentification si
+            match si
             INNER JOIN modifiedpeptide mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id
-            INNER JOIN peptideevidence pe1 ON mp1.id = pe1.peptide_ref AND mp1.upload_id = pe1.upload_id
+            INNER JOIN peptideevidence pe1 ON mp1.id = pe1.peptide_id AND mp1.upload_id = pe1.upload_id
             INNER JOIN modifiedpeptide mp2 ON si.pep2_id = mp2.id AND si.upload_id = mp2.upload_id
-            INNER JOIN peptideevidence pe2 ON mp2.id = pe2.peptide_ref AND mp2.upload_id = pe2.upload_id
+            INNER JOIN peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id
             INNER JOIN upload u ON u.id = si.upload_id
         WHERE
             u.id IN (
@@ -230,16 +258,16 @@ async def update_metadata_by_project(project_id: str, session: Session = Depends
     sql_crosslinks_per_protein = text("""
      WITH result AS (
         SELECT
-            pe1.dbsequence_ref AS dbref1,
-            pe1.peptide_ref AS pepref1,
-            pe2.dbsequence_ref AS dbref2,
-            pe2.peptide_ref AS pepref2
+            pe1.dbsequence_id AS dbref1,
+            pe1.peptide_id AS pepref1,
+            pe2.dbsequence_id AS dbref2,
+            pe2.peptide_id AS pepref2
         FROM
-            spectrumidentification si
+            match si
             INNER JOIN modifiedpeptide mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id
-            INNER JOIN peptideevidence pe1 ON mp1.id = pe1.peptide_ref AND mp1.upload_id = pe1.upload_id
+            INNER JOIN peptideevidence pe1 ON mp1.id = pe1.peptide_id AND mp1.upload_id = pe1.upload_id
             INNER JOIN modifiedpeptide mp2 ON si.pep2_id = mp2.id AND si.upload_id = mp2.upload_id
-            INNER JOIN peptideevidence pe2 ON mp2.id = pe2.peptide_ref AND mp2.upload_id = pe2.upload_id
+            INNER JOIN peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id
             INNER JOIN upload u ON u.id = si.upload_id
         WHERE
             u.id IN (
@@ -432,28 +460,30 @@ async def delete_dataset(project_id: str, session: Session = Depends(get_session
         session.query(ProjectSubDetail).filter(ProjectSubDetail.project_detail_id.in_(project_details_id_list)).delete()
         logging.info("trying to delete records from ProjectSubDetail")
         session.query(ProjectDetail).filter_by(project_id=project_id).delete()
-        logging.info("trying to delete records from ProjectDetail")
-        session.query(SpectrumIdentification).filter(SpectrumIdentification.upload_id.in_(upload_id_list)).delete()
-        logging.info("trying to delete records from SpectrumIdentification")
-        session.query(SearchModification).filter(SearchModification.upload_id.in_(upload_id_list)).delete()
+        logging.info("trying to delete records from Match")
+        session.query(Match).filter(Match.upload_id.in_(upload_id_list)).delete()
         logging.info("trying to delete records from SearchModification")
-        session.query(Enzyme).filter(Enzyme.upload_id.in_(upload_id_list)).delete()
+        session.query(SearchModification).filter(SearchModification.upload_id.in_(upload_id_list)).delete()
         logging.info("trying to delete records from Enzyme")
+        session.query(Enzyme).filter(Enzyme.upload_id.in_(upload_id_list)).delete()
+        logging.info("trying to delete records from AnalysisCollectionSpectrumIdentification")
+        session.query(AnalysisCollectionSpectrumIdentification).filter(
+            AnalysisCollectionSpectrumIdentification.upload_id.in_(upload_id_list)).delete()
+        logging.info("trying to delete records from SpectrumIdentificationProtocol")
         session.query(SpectrumIdentificationProtocol).filter(
             SpectrumIdentificationProtocol.upload_id.in_(upload_id_list)).delete()
-        logging.info("trying to delete records from SpectrumIdentificationProtocol")
-        session.query(ModifiedPeptide).filter(ModifiedPeptide.upload_id.in_(upload_id_list)).delete()
-        logging.info("trying to delete records from ModifiedPeptide")
-        session.query(DBSequence).filter(DBSequence.upload_id.in_(upload_id_list)).delete()
-        logging.info("trying to delete records from DBSequence")
-        session.query(Spectrum).filter(Spectrum.upload_id.in_(upload_id_list)).delete()
-        logging.info("trying to delete records from Spectrum")
-        session.query(PeptideEvidence).filter(PeptideEvidence.upload_id.in_(upload_id_list)).delete()
         logging.info("trying to delete records from PeptideEvidence")
-        session.query(AnalysisCollection).filter(AnalysisCollection.upload_id.in_(upload_id_list)).delete()
-        logging.info("trying to delete records from AnalysisCollection")
-        session.query(Upload).filter_by(project_id=project_id).delete()
+        session.query(PeptideEvidence).filter(PeptideEvidence.upload_id.in_(upload_id_list)).delete()
+        logging.info("trying to delete records from ModifiedPeptide")
+        session.query(ModifiedPeptide).filter(ModifiedPeptide.upload_id.in_(upload_id_list)).delete()
+        logging.info("trying to delete records from DBSequence")
+        session.query(DBSequence).filter(DBSequence.upload_id.in_(upload_id_list)).delete()
+        logging.info("trying to delete records from Spectrum")
+        session.query(Spectrum).filter(Spectrum.upload_id.in_(upload_id_list)).delete()
+        logging.info("trying to delete records from SpectraData")
+        session.query(SpectraData).filter(SpectraData.upload_id.in_(upload_id_list)).delete()
         logging.info("trying to delete records from Upload")
+        session.query(Upload).filter_by(project_id=project_id).delete()
         session.commit()
         logger.info("*****Deleted dataset: " + project_id)
         # invalidate_cache()
@@ -742,16 +772,16 @@ async def peptide_per_protein(session: Session = Depends(get_session),
                             WITH frequencytable AS (
                         WITH result AS (
                             SELECT
-                                pe1.dbsequence_ref AS dbref1,
-                                pe1.peptide_ref AS pepref1,
-                                pe2.dbsequence_ref AS dbref2,
-                                pe2.peptide_ref AS pepref2
+                                pe1.dbsequence_id AS dbref1,
+                                pe1.peptide_id AS pepref1,
+                                pe2.dbsequence_id AS dbref2,
+                                pe2.peptide_id AS pepref2
                             FROM
-                                spectrumidentification si
+                                match si
                                 INNER JOIN modifiedpeptide mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id
-                                INNER JOIN peptideevidence pe1 ON mp1.id = pe1.peptide_ref AND mp1.upload_id = pe1.upload_id
+                                INNER JOIN peptideevidence pe1 ON mp1.id = pe1.peptide_id AND mp1.upload_id = pe1.upload_id
                                 INNER JOIN modifiedpeptide mp2 ON si.pep2_id = mp2.id AND si.upload_id = mp2.upload_id
-                                INNER JOIN peptideevidence pe2 ON mp2.id = pe2.peptide_ref AND mp2.upload_id = pe2.upload_id
+                                INNER JOIN peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id
                                 INNER JOIN upload u ON u.id = si.upload_id
                             WHERE
                                 u.id IN (

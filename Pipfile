@@ -24,7 +24,7 @@ python-multipart = "*"
 python-jose = "*"
 passlib = "*"
 jose = "*"
-xi-mzidentml-converter = "0.1.23"
+xi-mzidentml-converter = "0.2.2"
 redis = "*"
 hiredis = "*"
 

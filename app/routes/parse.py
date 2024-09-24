@@ -4,7 +4,7 @@ import traceback
 from enum import Enum
 from typing import Annotated, Union
 
-from parser.api_writer import APIWriter
+from parser.APIWriter import APIWriter
 from typing_extensions import Doc
 
 from fastapi import APIRouter, Depends, Query, Body
@@ -22,7 +22,7 @@ from sqlalchemy import Table, MetaData, create_engine
 import logging.config
 
 logger = logging.getLogger(__name__)
-writer = APIWriter(get_conn_str())
+# writer = APIWriter(get_conn_str())
 engine = create_engine(get_conn_str())
 meta = MetaData()
 
@@ -33,14 +33,16 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 class TableNamesEnum(str, Enum):
     """Enumeration of Table names"""
-    analysiscollection = "analysiscollection"
+    # todo - alphebetize list of tables here and in other places, for consistency
+    analysiscollectionspectrumidentification = "analysiscollectionspectrumidentification"
     dbsequence = "dbsequence"
     enzyme = "enzyme"
     modifiedpeptide = "modifiedpeptide"
     peptideevidence = "peptideevidence"
     searchmodification = "searchmodification"
     spectrum = "spectrum"
-    spectrumidentification = "spectrumidentification"
+    match = "match"
+    spectradata = "spectradata"
     spectrumidentificationprotocol = "spectrumidentificationprotocol"
     upload = "upload"
     projectdetail = "projectdetail"

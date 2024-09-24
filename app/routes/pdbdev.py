@@ -49,7 +49,7 @@ async def sequences(project_id):
         for ProteomeXchange projects this is the PXD****** accession
     :return: JSON object with all dbref id, mzIdentML file it came from and sequences
     """
-
+    logging.info("Fetching sequences (PDBDev API)")
     most_recent_upload_ids = await get_most_recent_upload_ids(project_id)
 
     conn = None
@@ -62,20 +62,20 @@ async def sequences(project_id):
         sql = """SELECT dbseq.id, u.identification_file_name  as file, dbseq.sequence, dbseq.accession
                     FROM upload AS u
                     JOIN dbsequence AS dbseq ON u.id = dbseq.upload_id
-                    INNER JOIN peptideevidence pe ON dbseq.id = pe.dbsequence_ref AND dbseq.upload_id = pe.upload_id
+                    INNER JOIN peptideevidence pe ON dbseq.id = pe.dbsequence_id AND dbseq.upload_id = pe.upload_id
                  WHERE u.id = ANY (%s)
                  AND pe.is_decoy = false
                  GROUP by dbseq.id, dbseq.sequence, dbseq.accession, u.identification_file_name;"""
         cur.execute(sql, [most_recent_upload_ids])
         mzid_rows = cur.fetchall()
 
-        print("finished")
+        logging.info("Successfully fetched sequences")
     except (Exception, psycopg2.DatabaseError) as error:
-        print(error)
+        logging.error(error)
     finally:
         if conn is not None:
             conn.close()
-            print('Database connection closed.')
+            logging.info('Database connection closed.')
         return {"data": mzid_rows}
 
 
@@ -146,68 +146,68 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
 
         if passing_threshold.lower() == Threshold.passing:
             sql = """SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files, 
-            pe1.dbsequence_ref as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
-            pe2.dbsequence_ref as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2
-            FROM spectrumidentification si INNER JOIN
+            pe1.dbsequence_id as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
+            pe2.dbsequence_id as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2
+            FROM match si INNER JOIN
             modifiedpeptide mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id INNER JOIN
-            peptideevidence pe1 ON mp1.id = pe1.peptide_ref AND mp1.upload_id = pe1.upload_id INNER JOIN
-            dbsequence dbs1 ON pe1.dbsequence_ref = dbs1.id AND pe1.upload_id = dbs1.upload_id INNER JOIN
+            peptideevidence pe1 ON mp1.id = pe1.peptide_id AND mp1.upload_id = pe1.upload_id INNER JOIN
+            dbsequence dbs1 ON pe1.dbsequence_id = dbs1.id AND pe1.upload_id = dbs1.upload_id INNER JOIN
             modifiedpeptide mp2 ON si.pep2_id = mp2.id AND si.upload_id = mp2.upload_id INNER JOIN
-            peptideevidence pe2 ON mp2.id = pe2.peptide_ref AND mp2.upload_id = pe2.upload_id INNER JOIN
-            dbsequence dbs2 ON pe2.dbsequence_ref = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
+            peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id INNER JOIN
+            dbsequence dbs2 ON pe2.dbsequence_id = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
             upload u on u.id = si.upload_id
             WHERE u.id IN %(upload_ids)s AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
             AND si.pass_threshold = true
-            GROUP BY pe1.dbsequence_ref , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_ref, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
-            ORDER BY pe1.dbsequence_ref , (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_ref, (pe2.pep_start + mp2.link_site1 - 1)
+            GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
+            ORDER BY pe1.dbsequence_id , (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, (pe2.pep_start + mp2.link_site1 - 1)
             LIMIT %(limit)s OFFSET %(offset)s;"""
         else:
             sql = """SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files,
-            pe1.dbsequence_ref as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
-            pe2.dbsequence_ref as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2
-            FROM spectrumidentification si INNER JOIN
+            pe1.dbsequence_id as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
+            pe2.dbsequence_id as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2
+            FROM match si INNER JOIN
             modifiedpeptide mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id INNER JOIN
-            peptideevidence pe1 ON mp1.id = pe1.peptide_ref AND mp1.upload_id = pe1.upload_id INNER JOIN
-            dbsequence dbs1 ON pe1.dbsequence_ref = dbs1.id AND pe1.upload_id = dbs1.upload_id INNER JOIN
+            peptideevidence pe1 ON mp1.id = pe1.peptide_id AND mp1.upload_id = pe1.upload_id INNER JOIN
+            dbsequence dbs1 ON pe1.dbsequence_id = dbs1.id AND pe1.upload_id = dbs1.upload_id INNER JOIN
             modifiedpeptide mp2 ON si.pep2_id = mp2.id AND si.upload_id = mp2.upload_id INNER JOIN
-            peptideevidence pe2 ON mp2.id = pe2.peptide_ref AND mp2.upload_id = pe2.upload_id INNER JOIN
-            dbsequence dbs2 ON pe2.dbsequence_ref = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
+            peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id INNER JOIN
+            dbsequence dbs2 ON pe2.dbsequence_id = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
             upload u on u.id = si.upload_id
             WHERE u.id IN %(upload_ids)s AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
-            GROUP BY pe1.dbsequence_ref , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_ref, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
-            ORDER BY pe1.dbsequence_ref , (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_ref, (pe2.pep_start + mp2.link_site1 - 1)
+            GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
+            ORDER BY pe1.dbsequence_id , (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, (pe2.pep_start + mp2.link_site1 - 1)
             LIMIT %(limit)s OFFSET %(offset)s;"""
 
         if passing_threshold.lower() == Threshold.passing:
             count_sql = """SELECT count(*) FROM (SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files, 
-            pe1.dbsequence_ref as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
-            pe2.dbsequence_ref as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2
-            FROM spectrumidentification si INNER JOIN
+            pe1.dbsequence_id as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
+            pe2.dbsequence_id as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2
+            FROM match si INNER JOIN
             modifiedpeptide mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id INNER JOIN
-            peptideevidence pe1 ON mp1.id = pe1.peptide_ref AND mp1.upload_id = pe1.upload_id INNER JOIN
-            dbsequence dbs1 ON pe1.dbsequence_ref = dbs1.id AND pe1.upload_id = dbs1.upload_id INNER JOIN
+            peptideevidence pe1 ON mp1.id = pe1.peptide_id AND mp1.upload_id = pe1.upload_id INNER JOIN
+            dbsequence dbs1 ON pe1.dbsequence_id = dbs1.id AND pe1.upload_id = dbs1.upload_id INNER JOIN
             modifiedpeptide mp2 ON si.pep2_id = mp2.id AND si.upload_id = mp2.upload_id INNER JOIN
-            peptideevidence pe2 ON mp2.id = pe2.peptide_ref AND mp2.upload_id = pe2.upload_id INNER JOIN
-            dbsequence dbs2 ON pe2.dbsequence_ref = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
+            peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id INNER JOIN
+            dbsequence dbs2 ON pe2.dbsequence_id = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
             upload u on u.id = si.upload_id
             WHERE u.id IN %(upload_ids)s AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
             AND si.pass_threshold = true
-            GROUP BY pe1.dbsequence_ref , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_ref, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
+            GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
             ) as count;"""
         else:
             count_sql = """SELECT count(*) FROM (SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files,
-            pe1.dbsequence_ref as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
-            pe2.dbsequence_ref as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2
-            FROM spectrumidentification si INNER JOIN
+            pe1.dbsequence_id as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
+            pe2.dbsequence_id as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2
+            FROM match si INNER JOIN
             modifiedpeptide mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id INNER JOIN
-            peptideevidence pe1 ON mp1.id = pe1.peptide_ref AND mp1.upload_id = pe1.upload_id INNER JOIN
-            dbsequence dbs1 ON pe1.dbsequence_ref = dbs1.id AND pe1.upload_id = dbs1.upload_id INNER JOIN
+            peptideevidence pe1 ON mp1.id = pe1.peptide_id AND mp1.upload_id = pe1.upload_id INNER JOIN
+            dbsequence dbs1 ON pe1.dbsequence_id = dbs1.id AND pe1.upload_id = dbs1.upload_id INNER JOIN
             modifiedpeptide mp2 ON si.pep2_id = mp2.id AND si.upload_id = mp2.upload_id INNER JOIN
-            peptideevidence pe2 ON mp2.id = pe2.peptide_ref AND mp2.upload_id = pe2.upload_id INNER JOIN
-            dbsequence dbs2 ON pe2.dbsequence_ref = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
+            peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id INNER JOIN
+            dbsequence dbs2 ON pe2.dbsequence_id = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
             upload u on u.id = si.upload_id
             WHERE u.id IN %(upload_ids)s AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
-            GROUP BY pe1.dbsequence_ref , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_ref, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
+            GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
             ) as count;"""
 
         cur.execute(sql, sql_values)

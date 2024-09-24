@@ -13,8 +13,7 @@ import shutil
 from urllib.parse import urlparse
 
 from parser.MzIdParser import MzIdParser
-from parser.database_writer import DatabaseWriter
-from parser.writer import Writer
+from parser.DatabaseWriter import DatabaseWriter
 from db_config_parser import get_conn_str
 import logging.config
 

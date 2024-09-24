@@ -9,10 +9,12 @@ from app.routes.pdbdev import pdbdev_router
 from app.routes.xiview import xiview_data_router
 from app.routes.parse import parser_router
 from fastapi.middleware.gzip import GZipMiddleware
+from db_config_parser import API_version
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+API_VERSION = API_version()
 
 app = FastAPI(title="xi-mzidentml-converter ws",
               description="This is an API to crosslinking archive",
@@ -26,8 +28,8 @@ app = FastAPI(title="xi-mzidentml-converter ws",
                   "name": "Apache 2.0",
                   "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
               },
-              openapi_url="/pride/ws/archive/crosslinking/openapi.json",
-              docs_url="/pride/ws/archive/crosslinking/docs")
+              openapi_url="/pride/ws/archive/crosslinking/" + API_VERSION + "/openapi.json",
+              docs_url="/pride/ws/archive/crosslinking/" + API_VERSION + "/docs")
 
 # Set up CORS middleware
 origins = ["*"]
@@ -57,14 +59,14 @@ async def log_request_time(request: Request, call_next):
         logger.error(f"Request: {request.method} {request.url.path} raised an error in {process_time:.4f} seconds: {str(e)}")
         raise
     process_time = time.time() - start_time
-    if not (request.url.path.startswith("/pride/ws/archive/crosslinking/data/visualisations") or
-            request.url.path.startswith("/pride/ws/archive/crosslinking/health")):
+    if not (request.url.path.startswith("/pride/ws/archive/crosslinking/" + API_VERSION + "/data/visualisations") or
+            request.url.path.startswith("/pride/ws/archive/crosslinking/" + API_VERSION + "/health")):
         logger.info(f"Request: {request.method} {request.url.path} completed in {process_time:.4f} seconds")
 
     return response
 
-app.include_router(pride_router, prefix="/pride/ws/archive/crosslinking")
-app.include_router(pdbdev_router, prefix="/pride/ws/archive/crosslinking/pdbdev")
-app.include_router(xiview_data_router, prefix="/pride/ws/archive/crosslinking/data")
-app.include_router(parser_router, prefix="/pride/ws/archive/crosslinking/parse")
+app.include_router(pride_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION)
+app.include_router(pdbdev_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/pdbdev")
+app.include_router(xiview_data_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/data")
+app.include_router(parser_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/parse")
 
