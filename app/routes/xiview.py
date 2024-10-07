@@ -542,6 +542,32 @@ async def get_xiview_proteins(project, file=None):
     log_json_size(json_bytes, "proteins")  # slows things down a little
     return Response(json_bytes, media_type='application/json')
 
+@log_execution_time_async
+@xiview_data_router.get('/get_datasets', tags=["xiVIEW"])
+async def get_datasets():
+    conn = None
+    ds_rows = []
+    error = None
+    try:
+        conn = await get_db_connection()
+        cur = conn.cursor()
+        query = """SELECT DISTINCT project_id, identification_file_name FROM upload;"""
+        # logger.debug(query)
+        cur.execute(query)
+        ds_rows = cur.fetchall()
+        # logger.info("finished")
+        cur.close()
+    except (Exception, psycopg2.DatabaseError) as e:
+        print(e)
+        error = e
+    finally:
+        if conn is not None:
+            conn.close()
+            # logger.debug('Database connection closed.')
+        if error is not None:
+            raise error
+    return ds_rows
+
 
 @log_execution_time_async
 async def get_all_proteins(cur, ids):
