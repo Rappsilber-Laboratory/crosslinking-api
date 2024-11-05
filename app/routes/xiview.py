@@ -2,10 +2,11 @@ import logging
 import logging.config
 import struct
 
+import fastapi
 from fastapi import APIRouter, Depends, Request, Response, HTTPException, status
 import orjson
 from psycopg2.extras import RealDictCursor
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import session, Session
 from typing import List, Any, Optional
 
 from models.upload import Upload
