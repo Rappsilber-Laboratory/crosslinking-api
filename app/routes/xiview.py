@@ -6,11 +6,12 @@ import time
 
 import fastapi
 import psycopg2
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Request, Response, HTTPException, status
 import orjson
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 from sqlalchemy.orm import session, Session
+from typing import List, Any, Optional
 
 from models.upload import Upload
 from app.routes.shared import get_db_connection, get_most_recent_upload_ids, log_execution_time_async
@@ -18,6 +19,27 @@ from index import get_session
 from db_config_parser import get_xiview_base_url
 
 xiview_data_router = APIRouter()
+
+# async def execute_query(query: str, params: Optional[List[Any]] = None, fetch_one: bool = False):
+#     """
+#     Execute a query and return the result
+#     :param query: the query to execute
+#     :param params: the parameters to pass to the query
+#     :param fetch_one: whether to fetch one result or all
+#     :return: the result of the query
+#     """
+#     try:
+#         conn = await get_db_connection()
+#         with conn.cursor() as cur:
+#             cur.execute(query, params)
+#             result = cur.fetchone() if fetch_one else cur.fetchall()
+#         conn.commit()
+#         return result
+#     except Exception as e:
+#         logging.error(f"Database operation failed: {e}")
+#         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database operation failed")
+#     finally:
+#             conn.close()
 
 
 class EndpointFilter(logging.Filter):
@@ -102,7 +124,7 @@ def visualisations(project_id: str, request: Request, session: Session = Depends
         if filename not in processed_filenames:
             datafile = {
                 "filename": filename,
-                "visualisation": "cross-linking",
+                "visualisation": "cross-linking", # todo - we're not hyphenating crosslinking
                 "link": (xiview_base_url + "?project=" + project_id + "&file=" +
                          str(filename))
             }
@@ -200,6 +222,13 @@ async def get_results_metadata(cur, ids):
     cur.execute(query, [ids])
     metadata["spectrum_identification_protocols"] = cur.fetchall()
 
+    # spectradata for each id
+    query = """SELECT *
+            FROM spectradata sd
+            WHERE sd.upload_id = ANY(%s);"""
+    cur.execute(query, [ids])
+    metadata["spectra_data"] = cur.fetchall()
+
     # enzymes
     query = """SELECT *
             FROM enzyme e
@@ -219,10 +248,45 @@ async def get_results_metadata(cur, ids):
 
     return metadata
 
+@log_execution_time_async
+@xiview_data_router.get('/get_xiview_metadata', tags=["xiVIEW"])
+async def get_xiview_metadata(project, file=None):
+    """
+    Get the metadata for the xiVIEW visualisation.
+    URLs have the following structure:
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453&file=Cullin_SDA_1pcFDR.mzid
+    Users may provide only projects, meaning we need to have an aggregated view.
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453
+
+    :return: json of the metadata
+    """
+    logger.info(f"get_xiview_metadata for {project}, file: {file}")
+    most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
+
+    conn = None
+    data = {}
+    error = None
+
+    try:
+        conn = await get_db_connection()
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        data = await get_results_metadata(cur, most_recent_upload_ids)
+        cur.close()
+    except (Exception, psycopg2.DatabaseError) as e:
+        logger.error(e)
+        return {"error": "Database error"}, 500
+    finally:
+        if conn is not None:
+            conn.close()
+
+    start_time = time.time()
+    json_bytes = orjson.dumps(data)
+    logger.info(f'metadata json dump time: {time.time() - start_time}')
+    log_json_size(json_bytes, "metadata")
+    return Response(json_bytes, media_type='application/json')
 
 @log_execution_time_async
 async def get_matches(cur, ids):
-    # todo - check whats going on with this rank =1 and pass_threshold = True in mascot data, rank =1 condition seems to speeds things up (but should be redundant)
     # todo - rename 'si' to 'm'
     query = """WITH submodpep AS (SELECT * FROM modifiedpeptide WHERE upload_id = ANY(%s) AND link_site1 > -1)
 SELECT si.id AS id, si.pep1_id AS pi1, si.pep2_id AS pi2,
@@ -237,8 +301,8 @@ SELECT si.id AS id, si.pep1_id AS pi1, si.pep2_id AS pi2,
                 si.rank AS r,
                 si.sip_id AS sip                
             FROM match si 
-            INNER JOIN submodpep mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id 
-            INNER JOIN submodpep mp2 ON si.pep2_id = mp2.id AND si.upload_id = mp2.upload_id
+            INNER JOIN submodpep mp1 ON si.upload_id = mp1.upload_id AND si.pep1_id = mp1.id 
+            INNER JOIN submodpep mp2 ON si.upload_id = mp2.upload_id AND si.pep2_id = mp2.id 
             WHERE si.upload_id = ANY(%s) 
             AND si.pass_threshold = TRUE 
             AND mp1.link_site1 > -1
@@ -373,7 +437,7 @@ async def get_xiview_matches(project, file=None):
 
 
 @log_execution_time_async
-@xiview_data_router.get('/get_xiview_peptides', tags=["xiVIEW"])
+# @xiview_data_router.get('/get_xiview_peptides', tags=["xiVIEW"])
 async def get_xiview_peptides(project, file=None):
     """
     Get all the peptides.
@@ -435,7 +499,7 @@ async def get_all_peptides(cur, ids):
     return cur.fetchall()
 
 @log_execution_time_async
-@xiview_data_router.get('/get_xiview_peptides2', tags=["xiVIEW"])
+@xiview_data_router.get('/get_xiview_peptides', tags=["xiVIEW"])
 async def get_xiview_peptides2(project, file=None):
     """
     Get all the peptides.
@@ -475,7 +539,7 @@ async def get_xiview_peptides2(project, file=None):
 @log_execution_time_async
 async def get_peptides2(cur, ids):
     query = """with submatch as (select pep1_id, pep2_id, upload_id from match where upload_id = ANY(%s) and pass_threshold = true), 
-pep_ids as (select pep1_id, upload_id from submatch  union select pep2_id, upload_id from submatch),
+pep_ids as (select upload_id, pep1_id from submatch  union select upload_id, pep2_id from submatch),
 subpp AS (select * from peptideevidence WHERE upload_id = ANY(%s))
 select mp.id,
                 cast(mp.upload_id as text) AS u_id,
@@ -491,7 +555,7 @@ select mp.id,
                 mp.crosslinker_modmass as cl_m from pep_ids pi
 inner join modifiedpeptide mp on mp.upload_id = pi.upload_id and pi.pep1_id = mp.id
                     JOIN subpp AS pp
-                    ON mp.id = pp.peptide_id AND mp.upload_id = pp.upload_id
+                    ON mp.upload_id = pp.upload_id AND mp.id = pp.peptide_id 
                     GROUP BY mp.id, mp.upload_id, mp.base_sequence;"""
 
     cur.execute(query, [ids, ids])
@@ -535,7 +599,6 @@ async def get_xiview_proteins(project, file=None):
     log_json_size(json_bytes, "proteins")  # slows things down a little
     return Response(json_bytes, media_type='application/json')
 
-
 @log_execution_time_async
 async def get_all_proteins(cur, ids):
     query = """SELECT id, name, accession, sequence,
@@ -544,3 +607,30 @@ async def get_all_proteins(cur, ids):
                 ;"""
     cur.execute(query, [ids])
     return cur.fetchall()
+
+@log_execution_time_async
+@xiview_data_router.get('/get_datasets', tags=["xiVIEW"])
+async def get_datasets():
+    conn = None
+    ds_rows = []
+    error = None
+    try:
+        conn = await get_db_connection()
+        cur = conn.cursor()
+        query = """SELECT DISTINCT project_id, identification_file_name FROM upload;"""
+        # logger.debug(query)
+        cur.execute(query)
+        ds_rows = cur.fetchall()
+        # logger.info("finished")
+        cur.close()
+    except (Exception, psycopg2.DatabaseError) as e:
+        print(e)
+        error = e
+    finally:
+        if conn is not None:
+            conn.close()
+            # logger.debug('Database connection closed.')
+        if error is not None:
+            raise error
+    return ds_rows
+
