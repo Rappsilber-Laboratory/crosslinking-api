@@ -27,6 +27,7 @@ jose = "*"
 xi-mzidentml-converter = "0.2.2"
 redis = "*"
 hiredis = "*"
+asyncpg = "*"
 
 [dev-packages]
 
