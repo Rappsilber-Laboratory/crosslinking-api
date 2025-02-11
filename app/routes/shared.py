@@ -49,7 +49,7 @@ async def get_most_recent_upload_ids(pxid, file=None):
     if file:
         filename_clean = re.sub(r'[^0-9a-zA-Z-]+', '-', file)
         query = """SELECT id FROM upload 
-                WHERE project_id = $1 AND identification_file_name_clean = $2 
+                WHERE project_id = %s AND identification_file_name_clean = %s
                 ORDER BY upload_time DESC LIMIT 1;"""
         upload_ids = await execute_query(query, [pxid, filename_clean], fetch_one=True)
     else:
