@@ -2,6 +2,11 @@ import json
 import math
 from math import ceil
 
+import asyncpg
+
+from index import get_session
+from sqlalchemy import text
+
 import psycopg2
 from fastapi import APIRouter, Depends, Path, Response, Query
 import orjson
@@ -41,7 +46,7 @@ async def get_projects_by_protein(protein_id: str, session: Session = Depends(ge
 
 
 @pdbdev_router.get('/projects/{project_id}/sequences', tags=["PDB-Dev"])
-async def sequences(project_id):
+async def sequences(project_id, session: Session = Depends(get_session)):
     """
     Get all sequences belonging to a project.
 
@@ -52,31 +57,30 @@ async def sequences(project_id):
     logging.info("Fetching sequences (PDBDev API)")
     most_recent_upload_ids = await get_most_recent_upload_ids(project_id)
 
-    conn = None
+    if not most_recent_upload_ids:
+        return {"data": []}  # Avoid passing empty lists to SQL
+
     mzid_rows = []
     try:
-        # connect to the PostgreSQL server and create a cursor
-        conn = await get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
 
-        sql = """SELECT dbseq.id, u.identification_file_name  as file, dbseq.sequence, dbseq.accession
+        sql = text("""SELECT dbseq.id, u.identification_file_name  as file, dbseq.sequence, dbseq.accession
                     FROM upload AS u
                     JOIN dbsequence AS dbseq ON u.id = dbseq.upload_id
                     INNER JOIN peptideevidence pe ON dbseq.id = pe.dbsequence_id AND dbseq.upload_id = pe.upload_id
-                 WHERE u.id = ANY (%s)
+                 WHERE u.id = ANY (:most_recent_upload_ids)
                  AND pe.is_decoy = false
-                 GROUP by dbseq.id, dbseq.sequence, dbseq.accession, u.identification_file_name;"""
-        cur.execute(sql, [most_recent_upload_ids])
-        mzid_rows = cur.fetchall()
+                 GROUP by dbseq.id, dbseq.sequence, dbseq.accession, u.identification_file_name;""")
 
-        logging.info("Successfully fetched sequences")
+        mzid_rows = session.execute(sql, {"most_recent_upload_ids": [most_recent_upload_ids[0]]}).fetchall()
+        # Convert rows into dictionaries for JSON response
+        if mzid_rows:
+            mzid_data = [dict(row._mapping) for row in mzid_rows]
+        else:
+            return {"data": []}  # Avoid passing empty lists to SQL
+
     except (Exception, psycopg2.DatabaseError) as error:
         logging.error(error)
-    finally:
-        if conn is not None:
-            conn.close()
-            logging.info('Database connection closed.')
-        return {"data": mzid_rows}
+    return {"data": mzid_data}
 
 
 class Threshold(str, Enum):
