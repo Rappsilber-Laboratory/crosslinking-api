@@ -1,5 +1,6 @@
 import json
 import math
+import traceback
 from math import ceil
 
 import psycopg2
@@ -15,7 +16,7 @@ from typing import List
 from enum import Enum
 from typing import Annotated
 
-from app.routes.shared import get_db_connection, get_most_recent_upload_ids
+from app.routes.shared import get_db_connection, get_most_recent_upload_ids, fetch_json_response, execute_query
 
 pdbdev_router = APIRouter()
 
@@ -51,33 +52,14 @@ async def sequences(project_id):
     """
     logging.info("Fetching sequences (PDBDev API)")
     most_recent_upload_ids = await get_most_recent_upload_ids(project_id)
-
-    conn = None
-    mzid_rows = []
-    try:
-        # connect to the PostgreSQL server and create a cursor
-        conn = await get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        sql = """SELECT dbseq.id, u.identification_file_name  as file, dbseq.sequence, dbseq.accession
+    sql = """SELECT dbseq.id, u.identification_file_name  as file, dbseq.sequence, dbseq.accession
                     FROM upload AS u
                     JOIN dbsequence AS dbseq ON u.id = dbseq.upload_id
                     INNER JOIN peptideevidence pe ON dbseq.id = pe.dbsequence_id AND dbseq.upload_id = pe.upload_id
-                 WHERE u.id = ANY (%s)
+                 WHERE u.id = ANY ($1)
                  AND pe.is_decoy = false
                  GROUP by dbseq.id, dbseq.sequence, dbseq.accession, u.identification_file_name;"""
-        cur.execute(sql, [most_recent_upload_ids])
-        mzid_rows = cur.fetchall()
-
-        logging.info("Successfully fetched sequences")
-    except (Exception, psycopg2.DatabaseError) as error:
-        logging.error(error)
-    finally:
-        if conn is not None:
-            conn.close()
-            logging.info('Database connection closed.')
-        return {"data": mzid_rows}
-
+    return await fetch_json_response(sql, [most_recent_upload_ids])
 
 class Threshold(str, Enum):
     passing = "passing"
