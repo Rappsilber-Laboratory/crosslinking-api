@@ -1,17 +1,9 @@
-import json
 import math
-from math import ceil
-
-import asyncpg
-
-from index import get_session
-from sqlalchemy import text
+import traceback
 
 import psycopg2
 from fastapi import APIRouter, Depends, Path, Response, Query
 import orjson
-from fastapi import APIRouter, Depends
-from psycopg2.extras import RealDictCursor
 import logging
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -20,14 +12,14 @@ from typing import List
 from enum import Enum
 from typing import Annotated
 
-from app.routes.shared import get_db_connection, get_most_recent_upload_ids
+from app.routes.shared import get_most_recent_upload_ids, fetch_json_response, execute_query
 
 pdbdev_router = APIRouter()
 
 app_logger = logging.getLogger(__name__)
 
 
-@pdbdev_router.get("/projects/{protein_id}", response_model=List[str], tags=["PDB-Dev"])
+@pdbdev_router.get("/projects/{protein_id}", response_model=List[str], tags=["PDB-IHM"])
 async def get_projects_by_protein(protein_id: str, session: Session = Depends(get_session)):
     """
      Get the list of all the datasets in PRIDE crosslinking for a given protein.
@@ -45,8 +37,8 @@ async def get_projects_by_protein(protein_id: str, session: Session = Depends(ge
     return project_list
 
 
-@pdbdev_router.get('/projects/{project_id}/sequences', tags=["PDB-Dev"])
-async def sequences(project_id, session: Session = Depends(get_session)):
+@pdbdev_router.get('/projects/{project_id}/sequences', tags=["PDB-IHM"])
+async def sequences(project_id):
     """
     Get all sequences belonging to a project.
 
@@ -56,32 +48,14 @@ async def sequences(project_id, session: Session = Depends(get_session)):
     """
     logging.info("Fetching sequences (PDBDev API)")
     most_recent_upload_ids = await get_most_recent_upload_ids(project_id)
-
-    if not most_recent_upload_ids:
-        return {"data": []}  # Avoid passing empty lists to SQL
-
-    mzid_rows = []
-    try:
-
-        sql = text("""SELECT dbseq.id, u.identification_file_name  as file, dbseq.sequence, dbseq.accession
+    sql = """SELECT dbseq.id, u.identification_file_name  as file, dbseq.sequence, dbseq.accession
                     FROM upload AS u
                     JOIN dbsequence AS dbseq ON u.id = dbseq.upload_id
                     INNER JOIN peptideevidence pe ON dbseq.id = pe.dbsequence_id AND dbseq.upload_id = pe.upload_id
-                 WHERE u.id = ANY (:most_recent_upload_ids)
+                 WHERE u.id = ANY ($1)
                  AND pe.is_decoy = false
-                 GROUP by dbseq.id, dbseq.sequence, dbseq.accession, u.identification_file_name;""")
-
-        mzid_rows = session.execute(sql, {"most_recent_upload_ids": [most_recent_upload_ids[0]]}).fetchall()
-        # Convert rows into dictionaries for JSON response
-        if mzid_rows:
-            mzid_data = [dict(row._mapping) for row in mzid_rows]
-        else:
-            return {"data": []}  # Avoid passing empty lists to SQL
-
-    except (Exception, psycopg2.DatabaseError) as error:
-        logging.error(error)
-    return {"data": mzid_data}
-
+                 GROUP by dbseq.id, dbseq.sequence, dbseq.accession, u.identification_file_name;"""
+    return await fetch_json_response(sql, [most_recent_upload_ids])
 
 class Threshold(str, Enum):
     passing = "passing"
@@ -96,10 +70,9 @@ class Threshold(str, Enum):
 
 
 @pdbdev_router.get('/projects/{project_id}/residue-pairs/based-on-reported-psm-level/{passing_threshold}',
-                   tags=["PDB-Dev"])
+                   tags=["PDB-IHM"])
 async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
                                                                       title="Project ID",
-                                                                      pattern="^PXD\d{6}$",
                                                                       example="PXD019437")],
                                       passing_threshold: Annotated[Threshold, Path(...,
                                                                                    title="Threshold",
@@ -134,19 +107,10 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
                f"Valid values are: passing, all", 400
 
     most_recent_upload_ids = await get_most_recent_upload_ids(project_id)
-    response = {}
-    conn = None
     data = {}
+    response = {}
     try:
-        # connect to the PostgreSQL server and create a cursor
-        conn = await get_db_connection()
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-
-        sql_values = {
-            "upload_ids": tuple(upload_id[0] for upload_id in most_recent_upload_ids),
-            "limit": page_size,
-            "offset": (page - 1) * page_size
-        }
+        sql_values = [most_recent_upload_ids, page_size, (page - 1) * page_size] # todo - yucky, use named param's instead
 
         if passing_threshold.lower() == Threshold.passing:
             sql = """SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files, 
@@ -160,11 +124,11 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
             peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id INNER JOIN
             dbsequence dbs2 ON pe2.dbsequence_id = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
             upload u on u.id = si.upload_id
-            WHERE u.id IN %(upload_ids)s AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
+            WHERE u.id = ANY($1) AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
             AND si.pass_threshold = true
             GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
             ORDER BY pe1.dbsequence_id , (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, (pe2.pep_start + mp2.link_site1 - 1)
-            LIMIT %(limit)s OFFSET %(offset)s;"""
+            LIMIT $2 OFFSET $3;"""
         else:
             sql = """SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files,
             pe1.dbsequence_id as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
@@ -177,10 +141,10 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
             peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id INNER JOIN
             dbsequence dbs2 ON pe2.dbsequence_id = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
             upload u on u.id = si.upload_id
-            WHERE u.id IN %(upload_ids)s AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
+            WHERE u.id = ANY ($1) AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
             GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
             ORDER BY pe1.dbsequence_id , (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, (pe2.pep_start + mp2.link_site1 - 1)
-            LIMIT %(limit)s OFFSET %(offset)s;"""
+            LIMIT $2 OFFSET $3;"""
 
         if passing_threshold.lower() == Threshold.passing:
             count_sql = """SELECT count(*) FROM (SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files, 
@@ -194,7 +158,7 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
             peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id INNER JOIN
             dbsequence dbs2 ON pe2.dbsequence_id = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
             upload u on u.id = si.upload_id
-            WHERE u.id IN %(upload_ids)s AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
+            WHERE u.id = ANY($1) AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
             AND si.pass_threshold = true
             GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
             ) as count;"""
@@ -210,23 +174,18 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
             peptideevidence pe2 ON mp2.id = pe2.peptide_id AND mp2.upload_id = pe2.upload_id INNER JOIN
             dbsequence dbs2 ON pe2.dbsequence_id = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
             upload u on u.id = si.upload_id
-            WHERE u.id IN %(upload_ids)s AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
+            WHERE u.id = ANY($1) AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
             GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
             ) as count;"""
 
-        cur.execute(sql, sql_values)
-        mzid_rows = cur.fetchall()
-        data["data"] = mzid_rows
-
-        # Perform a COUNT query to get the total number of elements
-        cur.execute(count_sql, sql_values)
-        total_elements = cur.fetchone()["count"]
+        result = await execute_query(count_sql, [most_recent_upload_ids], True)
+        total_elements = result["count"]
 
         # Calculate the total pages based on the page size and total elements
         total_pages = math.ceil(total_elements / page_size)
-
+        data = await execute_query(sql, sql_values)
         response = {
-            "data": data["data"],
+            "data": [dict(record) for record in data],
             "page": {
                 "page_no": page,
                 "page_size": page_size,
@@ -236,14 +195,9 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
         }
 
         print("finished")
-        # close the communication with the PostgreSQL
-        cur.close()
     except (Exception, psycopg2.DatabaseError) as error:
         print(error)
-    finally:
-        if conn is not None:
-            conn.close()
-            print('Database connection closed.')
+        traceback.print_exc()
     return Response(orjson.dumps(response), media_type='application/json')
 
 
@@ -261,7 +215,7 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
 #     return "Not Implemented", 501
 
 
-@pdbdev_router.get('/projects/{project_id}/reported-thresholds', tags=["PDB-Dev"])
+@pdbdev_router.get('/projects/{project_id}/reported-thresholds', tags=["PDB-IHM"])
 async def get_reported_thresholds(project_id):
     """
     Get all reported thresholds for a project.
