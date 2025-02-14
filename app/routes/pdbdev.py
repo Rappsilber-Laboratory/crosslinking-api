@@ -115,7 +115,8 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
         if passing_threshold.lower() == Threshold.passing:
             sql = """SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files, 
             pe1.dbsequence_id as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
-            pe2.dbsequence_id as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2
+            pe2.dbsequence_id as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2,
+			coalesce (mp1.crosslinker_accession, mp2.crosslinker_accession) as crosslinker_accession
             FROM match si INNER JOIN
             modifiedpeptide mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id INNER JOIN
             peptideevidence pe1 ON mp1.id = pe1.peptide_id AND mp1.upload_id = pe1.upload_id INNER JOIN
@@ -132,7 +133,8 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
         else:
             sql = """SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files,
             pe1.dbsequence_id as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
-            pe2.dbsequence_id as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2
+            pe2.dbsequence_id as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2,
+			coalesce (mp1.crosslinker_accession, mp2.crosslinker_accession) as crosslinker_accession
             FROM match si INNER JOIN
             modifiedpeptide mp1 ON si.pep1_id = mp1.id AND si.upload_id = mp1.upload_id INNER JOIN
             peptideevidence pe1 ON mp1.id = pe1.peptide_id AND mp1.upload_id = pe1.upload_id INNER JOIN
