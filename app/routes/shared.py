@@ -49,7 +49,7 @@ async def get_most_recent_upload_ids(pxid, file=None):
     if file:
         filename_clean = re.sub(r'[^0-9a-zA-Z-]+', '-', file)
         query = """SELECT id FROM upload 
-                WHERE project_id = %s AND identification_file_name_clean = %s 
+                WHERE project_id = $1 AND identification_file_name_clean = $2
                 ORDER BY upload_time DESC LIMIT 1;"""
         upload_ids = await execute_query(query, [pxid, filename_clean], fetch_one=True)
     else:
@@ -60,7 +60,7 @@ async def get_most_recent_upload_ids(pxid, file=None):
                         where project_id = u.project_id 
                         and identification_file_name = u.identification_file_name )
                     and u.project_id = $1;"""
-        upload_ids = await execute_query(query, [pxid], fetch_one=True)
+        upload_ids = await execute_query(query, [pxid])
     if upload_ids is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No upload found for the given project/file")
     return upload_ids

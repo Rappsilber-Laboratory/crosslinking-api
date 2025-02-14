@@ -323,7 +323,7 @@ async def update_metadata_by_project(project_id: str, session: Session = Depends
 
     # get project details from PRIDE API
     logger.info("Updating project level metadata")
-    px_url = 'https://www.ebi.ac.uk/pride/ws/archive/v2/projects/' + project_id
+    px_url = 'https://www.ebi.ac.uk/pride/ws/archive/v3/projects/' + project_id
     logger.debug('GET request to PRIDE API: ' + px_url)
     pride_response = requests.get(px_url)
     r = requests.get(px_url)
@@ -890,7 +890,14 @@ async def find_uniprot_data(list_of_project_sub_details):
     accessions = []
     uniprot_records = []
     for sub_details in list_of_project_sub_details:
-        accessions.append(sub_details.protein_accession)
+        accession = sub_details.protein_accession
+        if '|' in accession:
+            parts = accession.split('|')
+            if len(parts) > 1:
+                extracted_id = parts[1]
+                print("Extracted ID:", extracted_id)
+                accession = extracted_id
+        accessions.append(accession)
         # batch size or last one in the list
         if i % batch_size == 0 or i == len(list_of_project_sub_details):
             complete_URL = ""
