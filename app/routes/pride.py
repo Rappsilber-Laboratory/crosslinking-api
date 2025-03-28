@@ -332,7 +332,7 @@ async def update_metadata_by_project(project_id: str, session: Session = Depends
         pride_json = pride_response.json()
         if pride_json is not None:
             if len(pride_json['references']) > 0:
-                project_details.pubmed_id = pride_json['references'][0]['pubmedId']
+                project_details.pubmed_id = pride_json['references'][0]['pubmedID']
             if len(pride_json['title']) > 0:
                 project_details.title = pride_json['title']
             if len(pride_json['projectDescription']) > 0:
