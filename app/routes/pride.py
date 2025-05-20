@@ -945,7 +945,7 @@ async def extract_uniprot_data(list_of_project_sub_details, uniprot_records):
                         else:
                             raise Exception("Error in matching genes section of uniprot response")
                     else:
-                        logger.warn(uniprot_result["primaryAccession"] + "is Inactive")
+                        logger.warning(uniprot_result["primaryAccession"] + "is Inactive")
             except Exception as error:
                 logger.error(str(error))
                 logger.error(
