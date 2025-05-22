@@ -28,9 +28,9 @@ logging.getLogger("uvicorn.access").addFilter(EndpointFilter())
 
 
 @xiview_data_router.get('/get_peaklist', tags=["xiVIEW"])
-async def get_peaklist(spectrum_id, sd_ref, upload_id):
+async def get_peaklist(id, sd_ref, upload_id):
     query = "SELECT intensity, mz FROM spectrum WHERE id = $1 AND spectra_data_id = $2 AND upload_id = $3"
-    data = await execute_query(query, [spectrum_id, int(sd_ref), int(upload_id)], fetch_one=True)
+    data = await execute_query(query, [id, int(sd_ref), int(upload_id)], fetch_one=True)
     # Create a new dictionary to store the unpacked values
     unpacked_data = {
         "intensity": struct.unpack('%sd' % (len(data['intensity']) // 8), data['intensity']),
@@ -65,15 +65,15 @@ def visualisations(project_id: str, request: Request, session: Session = Depends
 @xiview_data_router.get('/get_xiview_mzidentml_files', tags=["xiVIEW"])
 async def get_xiview_mzidentml_files(project, file=None):
     """
-    Get the metadata for the xiVIEW visualisation.
+    Get info on the the mzidentml files used in the xiVIEW visualisation.
     URLs have the following structure:
-    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453&file=Cullin_SDA_1pcFDR.mzid
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview__mzidentml_files?project=PXD020453&file=Cullin_SDA_1pcFDR.mzid
     Users may provide only projects, meaning we need to have an aggregated view.
-    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview__mzidentml_files?project=PXD020453
 
-    :return: json of the metadata
+    :return: json of the mzidentml file info
     """
-    logger.info(f"get_xiview_metadata for {project}, file: {file}")
+    logger.info(f"get_xiview_mzidentml_files for {project}, file: {file}")
     most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
 
     # get Upload(s) for each id
@@ -89,7 +89,7 @@ async def get_xiview_mzidentml_files(project, file=None):
                     u.upload_warnings AS warnings
                 FROM upload u
                 WHERE u.id = ANY($1);"""
-    return fetch_json_response(query, [most_recent_upload_ids])
+    return await fetch_json_response(query, [most_recent_upload_ids])
 
 
 @log_execution_time_async
@@ -111,7 +111,7 @@ async def get_xiview_analysis_collection_spectrum_identifications(project, file=
                     ac.search_database_refs
                 FROM analysiscollectionspectrumidentification ac
                 WHERE ac.upload_id = ANY($1);"""
-    return fetch_json_response(query, [most_recent_upload_ids])
+    return await fetch_json_response(query, [most_recent_upload_ids])
 
 
 @log_execution_time_async
@@ -138,7 +138,7 @@ async def get_xiview_spectrum_identification_protocols(project, file=None):
                     sip.threshold
                 FROM spectrumidentificationprotocol sip
                 WHERE sip.upload_id = ANY($1);"""
-    return fetch_json_response(query, [most_recent_upload_ids])
+    return await fetch_json_response(query, [most_recent_upload_ids])
 
 
 @log_execution_time_async
@@ -158,7 +158,7 @@ async def get_xiview_spectra_data(project, file=None):
     query = """SELECT *
                 FROM spectradata sd
                 WHERE sd.upload_id = ANY($1);"""
-    return fetch_json_response(query, [most_recent_upload_ids])
+    return await fetch_json_response(query, [most_recent_upload_ids])
 
 
 @xiview_data_router.get('/get_xiview_enzymes', tags=["xiVIEW"])
@@ -178,7 +178,7 @@ async def get_xiview_enzymes(project, file=None):
     query = """SELECT *
                 FROM enzyme e
                 WHERE e.upload_id = ANY($1);"""
-    return fetch_json_response(query, [most_recent_upload_ids])
+    return await fetch_json_response(query, [most_recent_upload_ids])
 
 
 @xiview_data_router.get('/get_xiview_search_modifications', tags=["xiVIEW"])
@@ -197,7 +197,7 @@ async def get_xiview_search_modifications(project, file=None):
     query = """SELECT *
                 FROM searchmodification sm
                 WHERE sm.upload_id = ANY($1);"""
-    return fetch_json_response(query, [most_recent_upload_ids])
+    return await fetch_json_response(query, [most_recent_upload_ids])
 
 
 @log_execution_time_async
