@@ -1,0 +1,134 @@
+name: CI/CD Pipeline to deploy in Embassy Cloud EBI Openstack platform
+
+on:
+  push:
+    branches:
+      - pride
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+  USERNAME: ${{ secrets.GHCR_USER }}
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  docker_build:
+    environment: prod
+    env:
+      PORT: ${{ vars.PORT }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: create Dockerfile with environment variables
+      run: envsubst < .Dockerfile > Dockerfile
+
+    - name: Print Dockerfile
+      run: cat Dockerfile
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v1
+
+    - name: Login to GHCR
+      uses: docker/login-action@v1
+      with:
+        registry: ghcr.io
+        username: ${{ secrets.GHCR_USER }}
+        password: ${{ secrets.GHCR_TOKEN }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v2
+      with:
+        context: .
+        push: true
+        tags: |
+          ghcr.io/${{ vars.API_GITHUB_REPOSITORY }}:latest
+          ghcr.io/${{ vars.API_GITHUB_REPOSITORY }}:${{ env.IMAGE_TAG }}
+
+  deploy:
+    needs: docker_build
+    environment: prod
+    runs-on: ubuntu-latest
+    env:
+      DOCKER_PULL_SECRET: pride-gitlab-docker-secret
+      DB_HOST : ${{ vars.DB_HOST }}
+      DB_DATABASE_NAME : ${{ vars.DB_DATABASE_NAME }}
+      DB_USER : ${{ vars.DB_USER }}
+      DB_PASSWORD : ${{ secrets.DB_PASSWORD }}
+      DB_PORT : ${{ vars.DB_PORT }}
+      API_KEY : ${{ secrets.API_KEY }}
+      API_VERSION : ${{ vars.API_VERSION }}
+      PORT: ${{ vars.PORT }}
+      node_port: ${{ vars.NODE_PORT }}
+      app_name: ${{ vars.APP_NAME }}
+      k8s_replicas: ${{ vars.K8S_REPLICAS }}
+      LOG_VOLUME_SIZE: ${{ vars.LOG_VOLUME_SIZE }}
+      log_volume_pvc: ${{ vars.LOG_VOLUME_PVC }}
+      K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE }}
+      K8S_STORAGECLASS: ${{ vars.K8S_STORAGECLASS }}
+      DATABASE_INI: ${{ vars.DATABASE_INI }}
+      LOGGING_INI: ${{ vars.LOGGING_INI }}
+      IMAGE: ghcr.io/${{ vars.API_GITHUB_REPOSITORY }}:latest
+      XIVIEW_PRIDE_URL: ${{ vars.XIVIEW_PRIDE_URL }}
+      REDIS_HOST: ${{ vars.REDIS_HOST }}
+      REDIS_PORT: ${{ vars.REDIS_PORT }}
+      REDIS_PASSWORD: ${{ vars.REDIS_PASSWORD }}
+      PEPTIDE_PER_PROTEIN: ${{ vars.PEPTIDE_PER_PROTEIN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y gettext tzdata coreutils
+
+      - name: Create kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo ${{ secrets.KUBE_CONFIG }} > kubeconfig
+          base64 -d kubeconfig > ~/.kube/config
+          kubectl config get-contexts
+
+      - name: Create a Namespace if not exists
+        run: kubectl create namespace ${{ vars.K8S_NAMESPACE }} || true
+
+      - name: Delete the docker pull secrete if exist
+        run: kubectl -n ${{ vars.K8S_NAMESPACE }} delete secret ${{ env.DOCKER_PULL_SECRET }} || true
+
+      - name: Create a Docker registry secret with new image
+        run: |
+          kubectl -n ${{ vars.K8S_NAMESPACE }} create secret docker-registry ${{ env.DOCKER_PULL_SECRET }} \
+          --docker-server=ghcr.io \
+          --docker-username=${{ env.USERNAME }} \
+          --docker-password=${{ secrets.GHCR_TOKEN }}
+
+      - name: Substitute database variables by environment variables or variables
+        run: envsubst < default.database.ini > database.ini
+
+      - name: Print database.ini
+        run: cat database.ini
+
+      - name: Create ConfigMap for DATABASE_INI
+        run: kubectl -n ${{ vars.K8S_NAMESPACE }} create configmap ${{ vars.DATABASE_INI }} --from-file=database.ini || true
+
+      - name: Replace configmap if it already exists for DATABASE_INI
+        run: kubectl -n ${{ vars.K8S_NAMESPACE }} create configmap ${{ vars.DATABASE_INI }} --from-file=database.ini -o yaml --dry-run=client | kubectl replace -f -
+
+      - name: Create ConfigMap for Logging INI
+        run: kubectl -n ${{ vars.K8S_NAMESPACE }} create configmap ${{ vars.LOGGING_INI }} --from-file=logging.ini || true
+
+      - name: Replace configmap if it already exists for Logging INI
+        run: kubectl -n ${{ vars.K8S_NAMESPACE }} create configmap ${{ vars.LOGGING_INI }} --from-file=logging.ini -o yaml --dry-run=client | kubectl replace -f -
+
+      - name: Substitute kubernetes variables by environment variables or variables
+        run: envsubst <.kubernetes.yml > kubernetes.yml
+
+      - name: Print kubernetes.yml
+        run: cat kubernetes.yml
+
+      - name: Deploy to Kubernetes
+        run: kubectl -n ${{ vars.K8S_NAMESPACE }} apply -f kubernetes.yml
+
+      - name: restart Pod in case if not pulling latest image
+        run: kubectl rollout restart deploy ${{ vars.APP_NAME }} -n ${{ vars.K8S_NAMESPACE }}
