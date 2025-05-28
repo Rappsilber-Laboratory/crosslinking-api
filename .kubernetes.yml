@@ -50,7 +50,7 @@ spec:
         - name: cache-volume
           emptyDir:
               sizeLimit: 100Gi
-        - name: xi-api-logs-volume
+        - name: xiview-api-prod-logs-volume
           persistentVolumeClaim:
             claimName: $log_volume_pvc
       containers:
