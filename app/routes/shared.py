@@ -139,6 +139,12 @@ async def execute_query(query: str, params: Optional[List[Any]] = None, fetch_on
             await conn.close()
 
 async def fetch_json_response(query, params):
+    """
+    Fetch a JSON response from the database
+    :param query: the query to execute
+    :param params: the parameters to pass to the query
+    :return: the JSON response
+    """
     records = await execute_query(query, params)
     records_list = [dict(record) for record in records]
     return Response(orjson.dumps(records_list), media_type='application/json')
