@@ -50,7 +50,7 @@ spec:
         - name: cache-volume
           emptyDir:
               sizeLimit: 100Gi
-        - name: xiview-api-prod-logs-volume-v1
+        - name: xiview-api-prod-logs-volume
           persistentVolumeClaim:
             claimName: $log_volume_pvc
       containers:
@@ -77,7 +77,7 @@ spec:
               readOnly: true
             - name: cache-volume
               mountPath: /home/appuser/mzId_convertor_temp
-            - name: xiview-api-prod-logs-volume-v1
+            - name: xiview-api-prod-logs-volume
               mountPath: /home/appuser/logs/$app_name
 
 ---
