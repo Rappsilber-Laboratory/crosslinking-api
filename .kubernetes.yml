@@ -77,7 +77,7 @@ spec:
               readOnly: true
             - name: cache-volume
               mountPath: /home/appuser/mzId_convertor_temp
-            - name: xi-api-logs-volume
+            - name: xiview-api-prod-logs-volume
               mountPath: /home/appuser/logs/$app_name
 
 ---
