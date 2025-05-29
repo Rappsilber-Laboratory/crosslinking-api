@@ -216,7 +216,7 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
 #         for ProteomeXchange projects this is the PXD****** accession
 #     :return:
 #     """
-#     return "Not Implemented", 501
+#     return Response("Not Implemented", status_code=501)
 
 
 @pdbdev_router.get('/projects/{project_id}/reported-thresholds', tags=["PDB-IHM"])
@@ -228,4 +228,4 @@ async def get_reported_thresholds(project_id):
         for ProteomeXchange projects this is the PXD****** accession
     :return:
     """
-    return "Not Implemented", 501
+    return Response("Not Implemented", status_code=501)

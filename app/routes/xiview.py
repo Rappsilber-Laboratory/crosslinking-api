@@ -40,7 +40,7 @@ async def get_peaklist(id, sd_ref, upload_id):
 
 
 @xiview_data_router.get('/visualisations/{project_id}', tags=["xiVIEW"])
-def visualisations(project_id: str, request: Request, session: Session = Depends(get_session)): #  request not used?
+def visualisations(project_id: str, session: Session = Depends(get_session)):
     xiview_base_url = get_xiview_base_url()
     project_detail = session.query(Upload) \
         .filter(Upload.project_id == project_id) \
