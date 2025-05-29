@@ -1,4 +1,4 @@
-name: Prod CI/CD Pipeline to deploy in Embassy Cloud EBI Openstack platform
+name: DEV-CI/CD Pipeline to deploy in Embassy Cloud EBI Openstack platform
 
 on:
   push:

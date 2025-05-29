@@ -38,8 +38,9 @@ async def get_peaklist(id, sd_ref, upload_id):
     }
     return Response(orjson.dumps(unpacked_data), media_type='application/json')
 
+
 @xiview_data_router.get('/visualisations/{project_id}', tags=["xiVIEW"])
-def visualisations(project_id: str, request: Request, session: Session = Depends(get_session)):
+def visualisations(project_id: str, session: Session = Depends(get_session)):
     xiview_base_url = get_xiview_base_url()
     project_detail = session.query(Upload) \
         .filter(Upload.project_id == project_id) \
@@ -52,7 +53,7 @@ def visualisations(project_id: str, request: Request, session: Session = Depends
             datafile = {
                 "filename": filename,
                 "visualisation": "cross-linking",  # todo - we're not hyphenating crosslinking
-                 "link": f"{xiview_base_url}?project={project_id}&file={filename}"
+                "link": f"{xiview_base_url}?project={project_id}&file={filename}"
             }
             datasets.append(datafile)
             processed_filenames.add(filename)
@@ -61,20 +62,19 @@ def visualisations(project_id: str, request: Request, session: Session = Depends
 
 
 @log_execution_time_async
-@xiview_data_router.get('/get_xiview_metadata', tags=["xiVIEW"])
-async def get_xiview_metadata(project, file=None):
+@xiview_data_router.get('/get_xiview_mzidentml_files', tags=["xiVIEW"])
+async def get_xiview_mzidentml_files(project, file=None):
     """
-    Get the metadata for the xiVIEW visualisation.
+    Get info on the the mzidentml files used in the xiVIEW visualisation.
     URLs have the following structure:
-    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453&file=Cullin_SDA_1pcFDR.mzid
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview__mzidentml_files?project=PXD020453&file=Cullin_SDA_1pcFDR.mzid
     Users may provide only projects, meaning we need to have an aggregated view.
-    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview__mzidentml_files?project=PXD020453
 
-    :return: json of the metadata
+    :return: json of the mzidentml file info
     """
-    logger.info(f"get_xiview_metadata for {project}, file: {file}")
+    logger.info(f"get_xiview_mzidentml_files for {project}, file: {file}")
     most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
-    metadata = {}
 
     # get Upload(s) for each id
     query = """SELECT u.id AS id,
@@ -89,11 +89,21 @@ async def get_xiview_metadata(project, file=None):
                     u.upload_warnings AS warnings
                 FROM upload u
                 WHERE u.id = ANY($1);"""
-    records = await execute_query(query, [most_recent_upload_ids])
-    records_list = [dict(record) for record in records]
-    metadata["mzidentml_files"] = records_list
+    return await fetch_json_response(query, [most_recent_upload_ids])
 
-    # get analysiscollectionspectrumidentification(s) for each id
+
+@log_execution_time_async
+@xiview_data_router.get('/get_xiview_analysis_collection_spectrum_identifications', tags=["xiVIEW"])
+async def get_xiview_analysis_collection_spectrum_identifications(project, file=None):
+    """
+    Get the metadata for the xiVIEW visualisation.
+    URLs have the following structure:
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453&file=Cullin_SDA_1pcFDR.mzid
+    Users may provide only projects, meaning we need to have an aggregated view.
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453
+    """
+    logger.info(f"get_xiview_analysis_collection_spectrum_identifications for {project}, file: {file}")
+    most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
     query = """SELECT ac.upload_id,
                     ac.spectrum_identification_list_ref,
                     ac.spectrum_identification_protocol_ref,
@@ -101,11 +111,23 @@ async def get_xiview_metadata(project, file=None):
                     ac.search_database_refs
                 FROM analysiscollectionspectrumidentification ac
                 WHERE ac.upload_id = ANY($1);"""
-    records = await execute_query(query, [most_recent_upload_ids])
-    records_list = [dict(record) for record in records]
-    metadata["analysis_collection_spectrum_identifications"] = records_list
+    return await fetch_json_response(query, [most_recent_upload_ids])
 
-    # get SpectrumIdentificationProtocol(s) for each id
+
+@log_execution_time_async
+@xiview_data_router.get('/get_xiview_spectrum_identification_protocols', tags=["xiVIEW"])
+async def get_xiview_spectrum_identification_protocols(project, file=None):
+    """
+    Get the metadata for the xiVIEW visualisation.
+    URLs have the following structure:
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453&file=Cullin_SDA_1pcFDR.mzid
+    Users may provide only projects, meaning we need to have an aggregated view.
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453
+
+    :return: fastapi Response containing json of the metadata
+    """
+    logger.info(f"get_xiview_spectrum_identification_protocol for {project}, file: {file}")
+    most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
     query = """SELECT sip.id AS id,
                     sip.sip_ref,
                     sip.upload_id,
@@ -116,36 +138,66 @@ async def get_xiview_metadata(project, file=None):
                     sip.threshold
                 FROM spectrumidentificationprotocol sip
                 WHERE sip.upload_id = ANY($1);"""
-    records = await execute_query(query, [most_recent_upload_ids])
-    records_list = [dict(record) for record in records]
-    metadata["spectrum_identification_protocols"] = records_list
+    return await fetch_json_response(query, [most_recent_upload_ids])
 
-    # spectradata for each id
+
+@log_execution_time_async
+@xiview_data_router.get('/get_xiview_spectra_data', tags=["xiVIEW"])
+async def get_xiview_spectra_data(project, file=None):
+    """
+    Get the metadata for the xiVIEW visualisation.
+    URLs have the following structure:
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453&file=Cullin_SDA_1pcFDR.mzid
+    Users may provide only projects, meaning we need to have an aggregated view.
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453
+
+    :return: json of the metadata
+    """
+    logger.info(f"get_xiview_spectra_data for {project}, file: {file}")
+    most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
     query = """SELECT *
                 FROM spectradata sd
                 WHERE sd.upload_id = ANY($1);"""
-    records = await execute_query(query, [most_recent_upload_ids])
-    records_list = [dict(record) for record in records]
-    metadata["spectra_data"] = records_list
+    return await fetch_json_response(query, [most_recent_upload_ids])
 
+
+@xiview_data_router.get('/get_xiview_enzymes', tags=["xiVIEW"])
+async def get_xiview_enzymes(project, file=None):
+    """
+    Get the metadata for the xiVIEW visualisation.
+    URLs have the following structure:
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453&file=Cullin_SDA_1pcFDR.mzid
+    Users may provide only projects, meaning we need to have an aggregated view.
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453
+
+    :return: fastapi Response containing json of the metadata
+    """
+    logger.info(f"get_xiview_enzymes for {project}, file: {file}")
+    most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
     # enzymes
     query = """SELECT *
                 FROM enzyme e
                 WHERE e.upload_id = ANY($1);"""
-    # metadata["enzymes"] = dict(await execute_query(query, [most_recent_upload_ids]))
-    records = await execute_query(query, [most_recent_upload_ids])
-    records_list = [dict(record) for record in records]
-    metadata["enzymes"] = records_list
+    return await fetch_json_response(query, [most_recent_upload_ids])
 
-    # search modifications
+
+@xiview_data_router.get('/get_xiview_search_modifications', tags=["xiVIEW"])
+async def get_xiview_search_modifications(project, file=None):
+    """
+    Get the metadata for the xiVIEW visualisation.
+    URLs have the following structure:
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453&file=Cullin_SDA_1pcFDR.mzid
+    Users may provide only projects, meaning we need to have an aggregated view.
+    https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview_metadata?project=PXD020453
+
+    :return: fastapi Response containing json of the metadata
+    """
+    logger.info(f"get_xiview_search_modifications for {project}, file: {file}")
+    most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
     query = """SELECT *
                 FROM searchmodification sm
                 WHERE sm.upload_id = ANY($1);"""
-    records = await execute_query(query, [most_recent_upload_ids])
-    records_list = [dict(record) for record in records]
-    metadata["search_modifications"] = records_list
-
-    return Response(orjson.dumps(metadata), media_type='application/json')
+    return await fetch_json_response(query, [most_recent_upload_ids])
 
 
 @log_execution_time_async

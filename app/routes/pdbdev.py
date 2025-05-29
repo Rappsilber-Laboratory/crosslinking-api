@@ -100,7 +100,9 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
     :param passing_threshold: valid values: passing, all
         if 'passing' return residue pairs that passed the threshold
         if 'all' return all residue pairs
-    :return:
+    :param page: page number
+    :param page_size: number of items per page
+    :return: JSON object with all residue pairs
     """
     if not Threshold.is_valid_enum(passing_threshold):
         return f"Invalid value for passing_threshold: {passing_threshold}. " \
@@ -214,7 +216,7 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
 #         for ProteomeXchange projects this is the PXD****** accession
 #     :return:
 #     """
-#     return "Not Implemented", 501
+#     return Response("Not Implemented", status_code=501)
 
 
 @pdbdev_router.get('/projects/{project_id}/reported-thresholds', tags=["PDB-IHM"])
@@ -226,4 +228,4 @@ async def get_reported_thresholds(project_id):
         for ProteomeXchange projects this is the PXD****** accession
     :return:
     """
-    return "Not Implemented", 501
+    return Response("Not Implemented", status_code=501)
