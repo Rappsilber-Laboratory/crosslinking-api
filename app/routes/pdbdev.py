@@ -19,7 +19,7 @@ pdbdev_router = APIRouter()
 app_logger = logging.getLogger(__name__)
 
 
-@pdbdev_router.get("/projects/{protein_id}", response_model=List[str], tags=["PDB-IHM"])
+@pdbdev_router.get("/projects/{protein_id}", response_model=List[str])
 async def get_projects_by_protein(protein_id: str, session: Session = Depends(get_session)):
     """
      Get the list of all the datasets in PRIDE crosslinking for a given protein.
@@ -37,7 +37,7 @@ async def get_projects_by_protein(protein_id: str, session: Session = Depends(ge
     return project_list
 
 
-@pdbdev_router.get('/projects/{project_id}/sequences', tags=["PDB-IHM"])
+@pdbdev_router.get('/projects/{project_id}/sequences')
 async def sequences(project_id):
     """
     Get all sequences belonging to a project.
@@ -69,8 +69,7 @@ class Threshold(str, Enum):
             return False
 
 
-@pdbdev_router.get('/projects/{project_id}/residue-pairs/based-on-reported-psm-level/{passing_threshold}',
-                   tags=["PDB-IHM"])
+@pdbdev_router.get('/projects/{project_id}/residue-pairs/based-on-reported-psm-level/{passing_threshold}')
 async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
                                                                       title="Project ID",
                                                                       example="PXD019437")],
@@ -219,7 +218,7 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
 #     return Response("Not Implemented", status_code=501)
 
 
-@pdbdev_router.get('/projects/{project_id}/reported-thresholds', tags=["PDB-IHM"])
+@pdbdev_router.get('/projects/{project_id}/reported-thresholds')
 async def get_reported_thresholds(project_id):
     """
     Get all reported thresholds for a project.
