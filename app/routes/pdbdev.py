@@ -19,7 +19,7 @@ pdbdev_router = APIRouter()
 app_logger = logging.getLogger(__name__)
 
 
-@pdbdev_router.get("/projects/{protein_id}", response_model=List[str], tags=["PDB-IHM"])
+@pdbdev_router.get("/projects/{protein_id}", response_model=List[str])
 async def get_projects_by_protein(protein_id: str, session: Session = Depends(get_session)):
     """
      Get the list of all the datasets in PRIDE crosslinking for a given protein.
@@ -37,7 +37,7 @@ async def get_projects_by_protein(protein_id: str, session: Session = Depends(ge
     return project_list
 
 
-@pdbdev_router.get('/projects/{project_id}/sequences', tags=["PDB-IHM"])
+@pdbdev_router.get('/projects/{project_id}/sequences')
 async def sequences(project_id):
     """
     Get all sequences belonging to a project.
@@ -69,8 +69,7 @@ class Threshold(str, Enum):
             return False
 
 
-@pdbdev_router.get('/projects/{project_id}/residue-pairs/based-on-reported-psm-level/{passing_threshold}',
-                   tags=["PDB-IHM"])
+@pdbdev_router.get('/projects/{project_id}/residue-pairs/based-on-reported-psm-level/{passing_threshold}')
 async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
                                                                       title="Project ID",
                                                                       example="PXD019437")],
@@ -129,7 +128,7 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
             upload u on u.id = si.upload_id
             WHERE u.id = ANY($1) AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
             AND si.pass_threshold = true
-            GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
+            GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1), mp1.crosslinker_accession, mp2.crosslinker_accession
             ORDER BY pe1.dbsequence_id , (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, (pe2.pep_start + mp2.link_site1 - 1)
             LIMIT $2 OFFSET $3;"""
         else:
@@ -146,7 +145,7 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
             dbsequence dbs2 ON pe2.dbsequence_id = dbs2.id AND pe2.upload_id = dbs2.upload_id INNER JOIN
             upload u on u.id = si.upload_id
             WHERE u.id = ANY ($1) AND mp1.link_site1 > 0 AND mp2.link_site1 > 0 AND pe1.is_decoy = false AND pe2.is_decoy = false
-            GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
+            GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1),  mp1.crosslinker_accession, mp2.crosslinker_accession
             ORDER BY pe1.dbsequence_id , (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, (pe2.pep_start + mp2.link_site1 - 1)
             LIMIT $2 OFFSET $3;"""
 
@@ -219,7 +218,7 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
 #     return Response("Not Implemented", status_code=501)
 
 
-@pdbdev_router.get('/projects/{project_id}/reported-thresholds', tags=["PDB-IHM"])
+@pdbdev_router.get('/projects/{project_id}/reported-thresholds')
 async def get_reported_thresholds(project_id):
     """
     Get all reported thresholds for a project.

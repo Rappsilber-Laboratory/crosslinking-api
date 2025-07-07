@@ -66,7 +66,8 @@ async def log_request_time(request: Request, call_next):
     return response
 
 app.include_router(pride_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION)
-app.include_router(pdbdev_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/pdbdev")
+app.include_router(pdbdev_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/pdbdev", tags=["Deprecated: PDBDev"])
+app.include_router(pdbdev_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/pdbihm", tags=["PDB-IHM"])
 app.include_router(xiview_data_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/data")
 app.include_router(parser_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/parse")
 

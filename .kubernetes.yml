@@ -1,15 +1,15 @@
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: $log_volume_pvc
-spec:
-  storageClassName: $K8S_STORAGECLASS
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: $LOG_VOLUME_SIZE
----
+#apiVersion: v1
+#kind: PersistentVolumeClaim
+#metadata:
+#  name: $log_volume_pvc
+#spec:
+#  storageClassName: $K8S_STORAGECLASS
+#  accessModes:
+#    - ReadWriteMany
+#  resources:
+#    requests:
+#      storage: $LOG_VOLUME_SIZE
+#---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,9 +50,9 @@ spec:
         - name: cache-volume
           emptyDir:
               sizeLimit: 100Gi
-        - name: xiview-api-prod-logs-volume
-          persistentVolumeClaim:
-            claimName: $log_volume_pvc
+#        - name: xiview-api-prod-logs-volume
+#          persistentVolumeClaim:
+#            claimName: $log_volume_pvc
       containers:
         - name: $app_name
           image: $IMAGE
@@ -77,8 +77,8 @@ spec:
               readOnly: true
             - name: cache-volume
               mountPath: /home/appuser/mzId_convertor_temp
-            - name: xiview-api-prod-logs-volume
-              mountPath: /home/appuser/logs/$app_name
+#            - name: xiview-api-prod-logs-volume
+#              mountPath: /home/appuser/logs/$app_name
 
 ---
 apiVersion: v1
