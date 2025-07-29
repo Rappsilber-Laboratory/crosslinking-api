@@ -215,7 +215,7 @@ async def get_xiview_matches(project, file=None):
     logger.info(f"get_xiview_matches for {project}, file: {file}")
     most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
     # todo - rename 'si' to 'm'
-    query = """WITH submodpep AS (SELECT * FROM modifiedpeptide WHERE upload_id = ANY($1) AND link_site1 > -1)
+    query = """WITH submodpep AS (SELECT id, link_site1, upload_id FROM modifiedpeptide WHERE upload_id = ANY($1) AND link_site1 > -1)
                 SELECT si.id AS id, si.pep1_id AS pi1, si.pep2_id AS pi2,
                     si.scores AS sc,
                     cast (si.upload_id as text) AS si,

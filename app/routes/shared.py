@@ -10,6 +10,7 @@ import time
 
 from configparser import ConfigParser
 from fastapi import status, HTTPException, Security, Response
+from fastapi.responses import ORJSONResponse
 from fastapi.security import APIKeyHeader
 from typing import Optional, List, Any
 
@@ -146,5 +147,4 @@ async def fetch_json_response(query, params):
     :return: the JSON response
     """
     records = await execute_query(query, params)
-    records_list = [dict(record) for record in records]
-    return Response(orjson.dumps(records_list), media_type='application/json')
+    return ORJSONResponse([dict(r) for r in records])
