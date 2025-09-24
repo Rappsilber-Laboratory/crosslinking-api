@@ -229,11 +229,10 @@ async def get_xiview_matches(project, file=None):
                     si.sip_id AS sip                
                 FROM match si 
                 INNER JOIN submodpep mp1 ON si.upload_id = mp1.upload_id AND si.pep1_id = mp1.id 
-                INNER JOIN submodpep mp2 ON si.upload_id = mp2.upload_id AND si.pep2_id = mp2.id 
+                LEFT JOIN submodpep mp2 ON si.upload_id = mp2.upload_id AND si.pep2_id = mp2.id 
                 WHERE si.upload_id = ANY($2) 
                 AND si.pass_threshold = TRUE 
-                AND mp1.link_site1 > -1
-                AND mp2.link_site1 > -1;"""
+                AND mp1.link_site1 > -1"""
     return await fetch_json_response(query, [most_recent_upload_ids, most_recent_upload_ids])
 
 
