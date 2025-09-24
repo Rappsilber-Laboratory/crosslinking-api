@@ -227,8 +227,8 @@ async def get_xiview_matches(project, file=None):
                     si.pass_threshold AS p,
                     si.rank AS r,
                     si.sip_id AS sip,
-                    si.multiple_spectra_identification_id,
-                    si.multiple_spectra_identification_pc
+                    si.multiple_spectra_identification_id AS msi_id,
+                    si.multiple_spectra_identification_pc AS msi_pc
                 FROM match si 
                 INNER JOIN submodpep mp1 ON si.upload_id = mp1.upload_id AND si.pep1_id = mp1.id 
                 LEFT JOIN submodpep mp2 ON si.upload_id = mp2.upload_id AND si.pep2_id = mp2.id 
