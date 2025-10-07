@@ -16,8 +16,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 API_VERSION = API_version()
 
-app = FastAPI(title="xi-mzidentml-converter ws",
-              description="This is an API to crosslinking archive",
+app = FastAPI(title="crosslinking-api ws",
+              description="This is an API to the PRIDE Crosslinking Section",
               version="0.0.1",
                 contact={
                   "name": "PRIDE Team",

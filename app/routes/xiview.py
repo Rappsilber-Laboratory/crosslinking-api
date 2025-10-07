@@ -215,7 +215,7 @@ async def get_xiview_matches(project, file=None):
     logger.info(f"get_xiview_matches for {project}, file: {file}")
     most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
     # todo - rename 'si' to 'm'
-    query = """WITH submodpep AS (SELECT * FROM modifiedpeptide WHERE upload_id = ANY($1) AND link_site1 > -1)
+    query = """WITH submodpep AS (SELECT id, link_site1, upload_id FROM modifiedpeptide WHERE upload_id = ANY($1) AND link_site1 > -1)
                 SELECT si.id AS id, si.pep1_id AS pi1, si.pep2_id AS pi2,
                     si.scores AS sc,
                     cast (si.upload_id as text) AS si,
@@ -226,14 +226,15 @@ async def get_xiview_matches(project, file=None):
                     si.spectra_data_id AS sd,
                     si.pass_threshold AS p,
                     si.rank AS r,
-                    si.sip_id AS sip                
+                    si.sip_id AS sip,
+                    si.multiple_spectra_identification_id AS msi_id,
+                    si.multiple_spectra_identification_pc AS msi_pc
                 FROM match si 
                 INNER JOIN submodpep mp1 ON si.upload_id = mp1.upload_id AND si.pep1_id = mp1.id 
-                INNER JOIN submodpep mp2 ON si.upload_id = mp2.upload_id AND si.pep2_id = mp2.id 
+                LEFT JOIN submodpep mp2 ON si.upload_id = mp2.upload_id AND si.pep2_id = mp2.id 
                 WHERE si.upload_id = ANY($2) 
                 AND si.pass_threshold = TRUE 
-                AND mp1.link_site1 > -1
-                AND mp2.link_site1 > -1;"""
+                AND mp1.link_site1 > -1"""
     return await fetch_json_response(query, [most_recent_upload_ids, most_recent_upload_ids])
 
 
@@ -293,6 +294,44 @@ async def get_xiview_proteins(project, file=None):
                      WHERE upload_id = ANY($1)
                 ;"""
     return await fetch_json_response(query, [most_recent_upload_ids])
+
+
+@log_execution_time_async
+@xiview_data_router.get('/get_matches_by_multiple_spectra_id', tags=["xiVIEW"])
+async def get_matches_by_multiple_spectra_id(upload_id: int, multiple_spectra_id: int):
+    """
+    Get all matches associated with a specific multiple_spectra_identification_id for a given upload.
+
+    Parameters:
+    - upload_id: The upload ID to filter matches
+    - multiple_spectra_id: The multiple_spectra_identification_id to filter matches
+
+    Returns:
+    - JSON array of match records
+    """
+    logger.info(f"get_matches_by_multiple_spectra_id for upload_id: {upload_id}, multiple_spectra_id: {multiple_spectra_id}")
+
+    query = """SELECT si.id AS id,
+                    si.pep1_id AS pi1,
+                    si.pep2_id AS pi2,
+                    si.scores AS sc,
+                    cast(si.upload_id as text) AS si,
+                    si.calc_mz AS c_mz,
+                    si.charge_state AS pc_c,
+                    si.exp_mz AS pc_mz,
+                    si.spectrum_id AS sp,
+                    si.spectra_data_id AS sd,
+                    si.pass_threshold AS p,
+                    si.rank AS r,
+                    si.sip_id AS sip,
+                    si.multiple_spectra_identification_id AS msi_id,
+                    si.multiple_spectra_identification_pc AS msi_pc
+                FROM match si
+                WHERE si.upload_id = $1
+                AND si.multiple_spectra_identification_id = $2
+                ORDER BY si.rank, si.id"""
+
+    return await fetch_json_response(query, [upload_id, multiple_spectra_id])
 
 
 @log_execution_time_async
