@@ -68,7 +68,7 @@ def visualisations(project_id: str, session: Session = Depends(get_session)):
 @xiview_data_router.get('/get_xiview_mzidentml_files', tags=["xiVIEW"])
 async def get_xiview_mzidentml_files(project, file=None):
     """
-    Get info on the the mzidentml files used in the xiVIEW visualisation.
+    Get info on the mzidentml files used in the xiVIEW visualisation.
     URLs have the following structure:
     https: // www.ebi.ac.uk / pride / archive / xiview / get_xiview__mzidentml_files?project=PXD020453&file=Cullin_SDA_1pcFDR.mzid
     Users may provide only projects, meaning we need to have an aggregated view.
@@ -83,13 +83,12 @@ async def get_xiview_mzidentml_files(project, file=None):
     query = """SELECT u.id AS id,
                     u.project_id,
                     u.identification_file_name,
+                    u.analysis_software_list,
                     u.provider,
                     u.audit_collection,
                     u.analysis_sample_collection,
                     u.bib,
-                    u.spectra_formats,
-                    u.contains_crosslinks,
-                    u.upload_warnings AS warnings
+                    u.spectra_formats
                 FROM upload u
                 WHERE u.id = ANY($1);"""
     return await fetch_json_response(query, [most_recent_upload_ids])
@@ -231,7 +230,7 @@ async def get_xiview_matches(project, file=None,
     query = """WITH submodpep AS (SELECT id, link_site1, upload_id FROM modifiedpeptide WHERE upload_id = ANY($1) AND link_site1 > -1)
                 SELECT si.id AS id, si.pep1_id AS pi1, si.pep2_id AS pi2,
                     si.scores AS sc,
-                    cast (si.upload_id as text) AS si,
+                    si.upload_id AS ui,
                     si.calc_mz AS c_mz,
                     si.charge_state AS pc_c,
                     si.exp_mz AS pc_mz,
@@ -289,7 +288,7 @@ async def get_xiview_peptides(project, file=None,
                 pep_ids AS (SELECT upload_id, pep1_id FROM submatch UNION SELECT upload_id, pep2_id FROM submatch),
                 subpp AS (SELECT * FROM peptideevidence WHERE upload_id = ANY($2))
                 SELECT mp.id,
-                                cast(mp.upload_id as text) AS u_id,
+                                mp.upload_id AS u_id,
                                 mp.base_sequence AS seq,
                                 array_agg(pp.dbsequence_id) AS prt,
                                 array_agg(pp.pep_start) AS pos,
@@ -375,7 +374,7 @@ async def get_matches_by_multiple_spectra_id(upload_id: int, multiple_spectra_id
                     si.pep1_id AS pi1,
                     si.pep2_id AS pi2,
                     si.scores AS sc,
-                    cast(si.upload_id as text) AS si,
+                    si.upload_id AS ui,
                     si.calc_mz AS c_mz,
                     si.charge_state AS pc_c,
                     si.exp_mz AS pc_mz,
