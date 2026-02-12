@@ -112,7 +112,7 @@ def write_new_upload(
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
-@parser_router.post("/write_mzid_info", tags=["Admin"])
+@parser_router.post("/write_mzid_info", tags=["Parser"])
 def write_mzid_info(analysis_software_list=Body(..., embeded=True),
                     spectra_formats=Body(..., embeded=True),
                     provider=Body(..., embeded=True),

@@ -16,9 +16,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 API_VERSION = API_version()
 
-app = FastAPI(title="crosslinking-api ws",
-              description="This is an API to the PRIDE Crosslinking Section",
-              version="0.0.1",
+app = FastAPI(title="Crosslinking API",
+              description="This is a REST API for accessing crosslinking data from the PRIDE Crosslinkling resource.",
+              version="3.0.0",
                 contact={
                   "name": "PRIDE Team",
                   "url": "https://www.ebi.ac.uk/pride/",
@@ -66,7 +66,7 @@ async def log_request_time(request: Request, call_next):
     return response
 
 app.include_router(pride_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION)
-app.include_router(pdbdev_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/pdbdev", tags=["Deprecated: PDBDev"])
+# app.include_router(pdbdev_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/pdbdev", tags=["Deprecated: PDBDev"])
 app.include_router(pdbdev_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/pdbihm", tags=["PDB-IHM"])
 app.include_router(xiview_data_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/data")
 app.include_router(parser_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/parse")
