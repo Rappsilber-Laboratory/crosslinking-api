@@ -910,6 +910,63 @@ def invalidate_cache(redis_config_param=Depends(redis_config)):
     return None
 
 
+def _extract_labheads_from_proxi(proxi_json):
+    """Extract lab head names from a ProteomeXchange PROXI dataset response."""
+    labheads = []
+    for contact in proxi_json.get("contacts", []):
+        terms = contact.get("terms", [])
+        is_labhead = any(t.get("accession") == "MS:1002332" for t in terms)
+        if is_labhead:
+            for t in terms:
+                if t.get("accession") == "MS:1000586" and t.get("value"):
+                    labheads.append(t["value"])
+    return labheads
+
+
+@pride_router.get("/labhead-count", tags=["Statistics"])
+async def labhead_count(session: Session = Depends(get_session),
+                        redis_config_param=Depends(redis_config)):
+    try:
+        key = redis_config_param['labhead_count']
+        redis_client = redis.Redis(host=redis_config_param['host'],
+                                   port=redis_config_param['port'],
+                                   password=redis_config_param['password'],
+                                   decode_responses=False)
+        if redis_client is not None and redis_client.exists(key):
+            values = redis_client.get(key)
+            return json.loads(values)
+        else:
+            sql_project_accession_list = text("""
+                SELECT DISTINCT u.project_id FROM upload u
+            """)
+            list_of_project_id = await get_accessions(sql_project_accession_list, {}, session)
+
+            labhead_set = set()
+            proxi_base_url = "https://proteomecentral.proteomexchange.org/api/proxi/v0.1/datasets/"
+            for project_id in list_of_project_id:
+                try:
+                    response = requests.get(proxi_base_url + project_id, timeout=30)
+                    if response.status_code == 200:
+                        names = _extract_labheads_from_proxi(response.json())
+                        labhead_set.update(names)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch PROXI data for {project_id}: {e}")
+
+            values = {
+                "labhead_count": len(labhead_set),
+                "labheads": sorted(labhead_set)
+            }
+
+            if values:
+                redis_client.set(key, json.dumps(values))
+                return values
+            else:
+                return None
+    except Exception as error:
+        logger.error(error)
+    return values
+
+
 async def update_protein_metadata(list_of_project_sub_details):
     # 1. metadata from Uniprot
     logger.info("Updating protein level metadata from Uniprot API...")
