@@ -9,8 +9,9 @@ from typing import List, Annotated, Union
 
 import redis
 import requests
-from fastapi import APIRouter, Depends, status, Query, Path
+from fastapi import APIRouter, Depends, status, Query, Path, UploadFile, File
 from fastapi import HTTPException, Security
+from fastapi.responses import FileResponse
 from models.upload import Upload
 from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
@@ -487,6 +488,63 @@ async def delete_dataset(project_id: str, session: Session = Depends(get_session
         session.rollback()
     finally:
         session.close()
+
+
+REPORT_DIR = os.environ.get(
+    "REPORT_DIR",
+    os.path.join(os.path.expanduser("~"), "mzId_convertor_temp", "reports"),
+)
+REPORT_FILENAME = "crosslinking_report.html"
+
+
+@pride_router.post("/report/upload", tags=["Admin"])
+async def upload_report(file: UploadFile = File(...),
+                        api_key: str = Security(get_api_key)):
+    """
+    Upload the crosslinking HTML report.
+    :param file: HTML report file
+    :param api_key: API KEY
+    :return: Success message
+    """
+    if not file.filename.endswith(".html"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only HTML files are accepted",
+        )
+    os.makedirs(REPORT_DIR, exist_ok=True)
+    report_path = os.path.join(REPORT_DIR, REPORT_FILENAME)
+    try:
+        contents = await file.read()
+        with open(report_path, "wb") as f:
+            f.write(contents)
+        logger.info(f"Report uploaded: {report_path} ({len(contents)} bytes)")
+        return {"message": "Report uploaded successfully", "filename": REPORT_FILENAME}
+    except Exception as e:
+        logger.error(f"Failed to upload report: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save report: {e}",
+        )
+
+
+@pride_router.get("/report/download", tags=["Admin"])
+async def download_report(api_key: str = Security(get_api_key)):
+    """
+    Download the crosslinking HTML report.
+    :param api_key: API KEY
+    :return: HTML report file
+    """
+    report_path = os.path.join(REPORT_DIR, REPORT_FILENAME)
+    if not os.path.exists(report_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No report has been uploaded yet",
+        )
+    return FileResponse(
+        path=report_path,
+        media_type="text/html",
+        filename=REPORT_FILENAME,
+    )
 
 
 @pride_router.get("/projects", tags=["Projects"], response_model=None)
