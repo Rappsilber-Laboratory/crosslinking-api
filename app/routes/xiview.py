@@ -1,12 +1,15 @@
 import logging.config
 import struct
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 import orjson
 from sqlalchemy.orm import Session
 
 from models.upload import Upload
-from app.routes.shared import get_most_recent_upload_ids, log_execution_time_async, execute_query, fetch_json_response
+from app.routes.shared import (
+    get_most_recent_upload_ids, log_execution_time_async, execute_query, fetch_json_response,
+    get_cached_response, set_cached_response, build_xiview_cache_key,
+)
 from index import get_session
 from db_config_parser import get_xiview_base_url
 
@@ -201,7 +204,9 @@ async def get_xiview_search_modifications(project, file=None):
 
 @log_execution_time_async
 @xiview_data_router.get('/get_xiview_matches', tags=["xiVIEW"])
-async def get_xiview_matches(project, file=None):
+async def get_xiview_matches(project, file=None,
+                             limit: int = Query(None, ge=1, le=100000, description="Max rows to return"),
+                             offset: int = Query(0, ge=0, description="Number of rows to skip")):
     """
     Get the passing matches.
     URLs have the following structure:
@@ -212,6 +217,14 @@ async def get_xiview_matches(project, file=None):
     :return: json of the matches
     """
     logger.info(f"get_xiview_matches for {project}, file: {file}")
+
+    # Only use cache for non-paginated (full) requests
+    if limit is None and offset == 0:
+        cache_key = build_xiview_cache_key("matches", project, file)
+        cached = get_cached_response(cache_key)
+        if cached:
+            return Response(content=cached, media_type='application/json')
+
     most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
     # todo - rename 'si' to 'm'
     query = """WITH submodpep AS (SELECT id, link_site1, upload_id FROM modifiedpeptide WHERE upload_id = ANY($1) AND link_site1 > -1)
@@ -228,18 +241,30 @@ async def get_xiview_matches(project, file=None):
                     si.sip_id AS sip,
                     si.multiple_spectra_identification_id AS msi_id,
                     si.multiple_spectra_identification_pc AS msi_pc
-                FROM match si 
-                INNER JOIN submodpep mp1 ON si.upload_id = mp1.upload_id AND si.pep1_id = mp1.id 
-                LEFT JOIN submodpep mp2 ON si.upload_id = mp2.upload_id AND si.pep2_id = mp2.id 
-                WHERE si.upload_id = ANY($2) 
-                AND si.pass_threshold = TRUE 
+                FROM match si
+                INNER JOIN submodpep mp1 ON si.upload_id = mp1.upload_id AND si.pep1_id = mp1.id
+                LEFT JOIN submodpep mp2 ON si.upload_id = mp2.upload_id AND si.pep2_id = mp2.id
+                WHERE si.upload_id = ANY($2)
+                AND si.pass_threshold = TRUE
                 AND mp1.link_site1 > -1"""
-    return await fetch_json_response(query, [most_recent_upload_ids, most_recent_upload_ids])
+
+    params = [most_recent_upload_ids, most_recent_upload_ids]
+    if limit is not None:
+        query += f" LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+        params.extend([limit, offset])
+
+    records = await execute_query(query, params)
+    json_bytes = orjson.dumps([dict(r) for r in records])
+    if limit is None and offset == 0:
+        set_cached_response(cache_key, json_bytes)
+    return Response(content=json_bytes, media_type='application/json')
 
 
 @log_execution_time_async
 @xiview_data_router.get('/get_xiview_peptides', tags=["xiVIEW"])
-async def get_xiview_peptides(project, file=None):
+async def get_xiview_peptides(project, file=None,
+                              limit: int = Query(None, ge=1, le=100000, description="Max rows to return"),
+                              offset: int = Query(0, ge=0, description="Number of rows to skip")):
     """
     Get all the peptides.
     URLs have the following structure:
@@ -250,9 +275,16 @@ async def get_xiview_peptides(project, file=None):
     :return: json of the peptides
     """
     logger.info(f"get_xiview_peptides for {project}, file: {file}")
+
+    if limit is None and offset == 0:
+        cache_key = build_xiview_cache_key("peptides", project, file)
+        cached = get_cached_response(cache_key)
+        if cached:
+            return Response(content=cached, media_type='application/json')
+
     most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
 
-    query = """WITH submatch AS (SELECT pep1_id, pep2_id, upload_id FROM match WHERE upload_id = ANY($1) AND pass_threshold = true), 
+    query = """WITH submatch AS (SELECT pep1_id, pep2_id, upload_id FROM match WHERE upload_id = ANY($1) AND pass_threshold = true),
                 pep_ids AS (SELECT upload_id, pep1_id FROM submatch UNION SELECT upload_id, pep2_id FROM submatch),
                 subpp AS (SELECT * FROM peptideevidence WHERE upload_id = ANY($2))
                 SELECT mp.id,
@@ -269,14 +301,26 @@ async def get_xiview_peptides(project, file=None):
                                 mp.crosslinker_modmass AS cl_m FROM pep_ids pi
                 INNER JOIN modifiedpeptide mp ON mp.upload_id = pi.upload_id AND pi.pep1_id = mp.id
                                     JOIN subpp AS pp
-                                    ON mp.upload_id = pp.upload_id AND mp.id = pp.peptide_id 
-                                    GROUP BY mp.id, mp.upload_id, mp.base_sequence;"""
-    return await fetch_json_response(query, [most_recent_upload_ids, most_recent_upload_ids])
+                                    ON mp.upload_id = pp.upload_id AND mp.id = pp.peptide_id
+                                    GROUP BY mp.id, mp.upload_id, mp.base_sequence"""
+
+    params = [most_recent_upload_ids, most_recent_upload_ids]
+    if limit is not None:
+        query += f" LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+        params.extend([limit, offset])
+
+    records = await execute_query(query, params)
+    json_bytes = orjson.dumps([dict(r) for r in records])
+    if limit is None and offset == 0:
+        set_cached_response(cache_key, json_bytes)
+    return Response(content=json_bytes, media_type='application/json')
 
 
 @log_execution_time_async
 @xiview_data_router.get('/get_xiview_proteins', tags=["xiVIEW"])
-async def get_xiview_proteins(project, file=None):
+async def get_xiview_proteins(project, file=None,
+                              limit: int = Query(None, ge=1, le=100000, description="Max rows to return"),
+                              offset: int = Query(0, ge=0, description="Number of rows to skip")):
     """
     Get all the proteins.
     URLs have the following structure:
@@ -287,11 +331,30 @@ async def get_xiview_proteins(project, file=None):
     :return: json of the proteins
     """
     logger.info(f"get_xiview_proteins for {project}, file: {file}")
+
+    if limit is None and offset == 0:
+        cache_key = build_xiview_cache_key("proteins", project, file)
+        cached = get_cached_response(cache_key)
+        if cached:
+            return Response(content=cached, media_type='application/json')
+
     most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
-    query = """SELECT id, name, accession, sequence, upload_id, description FROM dbsequence
-                     WHERE upload_id = ANY($1)
-                ;"""
-    return await fetch_json_response(query, [most_recent_upload_ids])
+
+    query = """SELECT id, name, accession, sequence,
+                     cast(upload_id as text) AS search_id, description FROM dbsequence
+                     WHERE upload_id = ANY($1)"""
+
+    params = [most_recent_upload_ids]
+    if limit is not None:
+        query += f" LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+        params.extend([limit, offset])
+
+    records = await execute_query(query, params)
+    json_bytes = orjson.dumps([dict(r) for r in records])
+    if limit is None and offset == 0:
+        set_cached_response(cache_key, json_bytes)
+    return Response(content=json_bytes, media_type='application/json')
+
 
 
 @log_execution_time_async
