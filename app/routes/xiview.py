@@ -339,6 +339,7 @@ async def get_xiview_proteins(project, file=None,
             return Response(content=cached, media_type='application/json')
 
     most_recent_upload_ids = await get_most_recent_upload_ids(project, file)
+
     query = """SELECT id, name, accession, sequence,
                      cast(upload_id as text) AS search_id, description FROM dbsequence
                      WHERE upload_id = ANY($1)"""
@@ -353,6 +354,7 @@ async def get_xiview_proteins(project, file=None,
     if limit is None and offset == 0:
         set_cached_response(cache_key, json_bytes)
     return Response(content=json_bytes, media_type='application/json')
+
 
 
 @log_execution_time_async
