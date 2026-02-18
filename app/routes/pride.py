@@ -619,7 +619,7 @@ async def project_search(q: Union[str | None] = Query(default="",
         offset = (page - 1) * page_size
         projects = session.query(ProjectDetail).filter(ProjectDetail.id.in_(list_of_ids)).offset(offset).limit(
             page_size).all()
-        total_elements = session.query(ProjectDetail).filter(ProjectDetail.id.in_(list_of_ids)).all().__len__()
+        total_elements = len(list_of_ids)
     except Exception as e:
         # Handle the exception here
         logging.error(f"Error occurred: {str(e)}")
@@ -682,18 +682,19 @@ async def protein_search(project_id: Annotated[str, Path(...,
     :return: List of ProjectDetails in JSON format
     """
     try:
-        where_condition = """project_detail_id IN (SELECT id FROM projectdetails WHERE project_id = :project_id)"""
+        where_condition = """ps.project_detail_id = pd.id AND pd.project_id = :project_id"""
 
         if q and q != '*' and q != 'all':
-            where_condition += """ AND (protein_accession LIKE '%' || :query || '%' 
-                     OR gene_name LIKE '%' || :query || '%' 
-                     OR protein_name LIKE '%' || :query || '%')
+            where_condition += """ AND (ps.protein_accession LIKE '%' || :query || '%'
+                     OR ps.gene_name LIKE '%' || :query || '%'
+                     OR ps.protein_name LIKE '%' || :query || '%')
             """
 
         sql = text(f"""
-            SELECT * FROM projectsubdetails 
+            SELECT ps.* FROM projectsubdetails ps
+            JOIN projectdetails pd ON ps.project_detail_id = pd.id
             WHERE {where_condition}
-            ORDER BY id
+            ORDER BY ps.id
             LIMIT :limit OFFSET :offset
         """)
 
@@ -706,7 +707,8 @@ async def protein_search(project_id: Annotated[str, Path(...,
         }
 
         sql_total_count = text(f"""
-                  SELECT id FROM projectsubdetails 
+                  SELECT COUNT(*) FROM projectsubdetails ps
+                  JOIN projectdetails pd ON ps.project_detail_id = pd.id
                   WHERE {where_condition}
               """)
 
@@ -718,8 +720,7 @@ async def protein_search(project_id: Annotated[str, Path(...,
 
         # Execute the SQL query
         result = session.execute(sql, sql_values)
-        result_total = session.execute(sql_total_count, sql_values_total_count)
-        total_elements = result_total.all().__len__()
+        total_elements = session.execute(sql_total_count, sql_values_total_count).scalar()
         proteins = result.fetchall()
 
         # Convert rows to a list of ProjectSubDetail objects

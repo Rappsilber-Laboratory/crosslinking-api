@@ -1,4 +1,5 @@
 import time
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +9,7 @@ from app.routes.pride import pride_router
 from app.routes.pdbdev import pdbdev_router
 from app.routes.xiview import xiview_data_router
 from app.routes.parse import parser_router
+from app.routes.shared import init_db_pool, close_db_pool
 from fastapi.middleware.gzip import GZipMiddleware
 from db_config_parser import API_version
 
@@ -15,6 +17,16 @@ from db_config_parser import API_version
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 API_VERSION = API_version()
+
+
+@asynccontextmanager
+async def lifespan(app):
+    # Startup: initialize asyncpg connection pool
+    await init_db_pool()
+    yield
+    # Shutdown: close asyncpg connection pool
+    await close_db_pool()
+
 
 app = FastAPI(title="Crosslinking API",
               description="This is a REST API for accessing crosslinking data from the PRIDE Crosslinkling resource.",
@@ -29,7 +41,8 @@ app = FastAPI(title="Crosslinking API",
                   "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
               },
               openapi_url="/pride/ws/archive/crosslinking/" + API_VERSION + "/openapi.json",
-              docs_url="/pride/ws/archive/crosslinking/" + API_VERSION + "/docs")
+              docs_url="/pride/ws/archive/crosslinking/" + API_VERSION + "/docs",
+              lifespan=lifespan)
 
 # Set up CORS middleware
 origins = ["*"]

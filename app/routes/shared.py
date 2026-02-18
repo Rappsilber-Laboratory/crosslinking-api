@@ -8,17 +8,118 @@ import orjson
 import logging.config
 import time
 
+import redis
 from configparser import ConfigParser
 from fastapi import status, HTTPException, Security, Response
 from fastapi.responses import ORJSONResponse
 from fastapi.security import APIKeyHeader
 from typing import Optional, List, Any
 
-from db_config_parser import security_API_key
+from db_config_parser import security_API_key, redis_config as get_redis_config
 
 logger = logging.getLogger(__name__)
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+# Global asyncpg connection pool
+_db_pool: Optional[asyncpg.Pool] = None
+
+
+async def init_db_pool():
+    """Initialize the asyncpg connection pool. Call at app startup."""
+    global _db_pool
+    if _db_pool is not None:
+        return
+    db_info = await _parse_database_info()
+    _db_pool = await asyncpg.create_pool(
+        min_size=10,
+        max_size=30,
+        **db_info,
+    )
+    logger.info("asyncpg connection pool initialized (min=10, max=30)")
+
+
+async def close_db_pool():
+    """Close the asyncpg connection pool. Call at app shutdown."""
+    global _db_pool
+    if _db_pool is not None:
+        await _db_pool.close()
+        _db_pool = None
+        logger.info("asyncpg connection pool closed")
+
+
+async def _parse_database_info():
+    config = os.environ.get('DB_CONFIG', 'database.ini')
+    parser = ConfigParser()
+    parser.read(config)
+    section = 'postgresql'
+    db = {}
+    if parser.has_section(section):
+        params = parser.items(section)
+        for param in params:
+            db[param[0]] = param[1]
+    else:
+        raise Exception(f'Section {section} not found in the {config} file')
+    return db
+
+
+# Shared Redis connection pool (lazy-initialized)
+_redis_pool: Optional[redis.ConnectionPool] = None
+_XIVIEW_CACHE_TTL = 43200  # 12 hours in seconds
+
+
+def _get_redis_client() -> Optional[redis.Redis]:
+    """Get a Redis client using a shared connection pool."""
+    global _redis_pool
+    try:
+        if _redis_pool is None:
+            redis_cfg = get_redis_config()
+            _redis_pool = redis.ConnectionPool(
+                host=redis_cfg['host'],
+                port=int(redis_cfg['port']),
+                password=redis_cfg.get('password'),
+                max_connections=20,
+                decode_responses=False,
+            )
+        return redis.Redis(connection_pool=_redis_pool)
+    except Exception as e:
+        logger.warning(f"Redis unavailable, skipping cache: {e}")
+        return None
+
+
+def get_cached_response(cache_key: str) -> Optional[bytes]:
+    """Try to get a cached response from Redis."""
+    client = _get_redis_client()
+    if client is None:
+        return None
+    try:
+        data = client.get(cache_key)
+        if data:
+            logger.info(f"Cache HIT for {cache_key}")
+        return data
+    except Exception as e:
+        logger.warning(f"Redis get failed for {cache_key}: {e}")
+        return None
+
+
+def set_cached_response(cache_key: str, data: bytes, ttl: int = _XIVIEW_CACHE_TTL):
+    """Store a response in Redis with TTL."""
+    client = _get_redis_client()
+    if client is None:
+        return
+    try:
+        client.setex(cache_key, ttl, data)
+        logger.info(f"Cache SET for {cache_key} (TTL={ttl}s)")
+    except Exception as e:
+        logger.warning(f"Redis set failed for {cache_key}: {e}")
+
+
+def build_xiview_cache_key(endpoint: str, project: str, file: Optional[str] = None) -> str:
+    """Build a consistent cache key for xiVIEW endpoints."""
+    if file:
+        return f"xiview:{endpoint}:{project}:{file}"
+    return f"xiview:{endpoint}:{project}"
+
 
 def log_execution_time_async(func):
     @functools.wraps(func)
@@ -68,28 +169,10 @@ async def get_most_recent_upload_ids(pxid, file=None):
 
 
 async def get_db_connection():
-    config = os.environ.get('DB_CONFIG', 'database.ini')
-
-    # https://www.postgresqltutorial.com/postgresql-python/connect/
-    async def parse_database_info(filename, section='postgresql'):
-        # create a parser
-        parser = ConfigParser()
-        # read config file
-        parser.read(filename)
-
-        # get section, default to postgresql
-        db = {}
-        if parser.has_section(section):
-            params = parser.items(section)
-            for param in params:
-                db[param[0]] = param[1]
-        else:
-            raise Exception('Section {0} not found in the {1} file'.format(section, filename))
-
-        return db
-
-    db_info = await parse_database_info(config)
-    conn = await asyncpg.connect(**db_info)
+    """Get a connection from the pool. Prefer using execute_query() instead."""
+    if _db_pool is None:
+        await init_db_pool()
+    conn = await _db_pool.acquire()
     await conn.set_type_codec(
         'json',
         encoder=json.dumps,
@@ -117,27 +200,25 @@ async def execute_query(query: str, params: Optional[List[Any]] = None, fetch_on
     :param fetch_one: whether to fetch one result or all
     :return: the result of the query
     """
-    conn = None
+    if _db_pool is None:
+        await init_db_pool()
     try:
-        # Get the connection without using 'async with'
-        conn = await get_db_connection()
-        # Execute the query directly on conn without a cursor
-        if fetch_one:
-            result = await conn.fetchrow(query, *params)
-        else:
-            result = await conn.fetch(query, *params)
-        # No explicit commit needed for asyncpg; auto-commits for DML queries
-        # it's all SELECT queries anyway, so no need for commit - cc
-        return result
+        async with _db_pool.acquire() as conn:
+            await conn.set_type_codec(
+                'json',
+                encoder=json.dumps,
+                decoder=json.loads,
+                schema='pg_catalog'
+            )
+            if fetch_one:
+                result = await conn.fetchrow(query, *params)
+            else:
+                result = await conn.fetch(query, *params)
+            return result
 
     except Exception as e:
         logging.error(f"Database operation failed: {e}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Database operation failed")
-
-    finally:
-        # Close the connection explicitly
-        if conn:
-            await conn.close()
 
 async def fetch_json_response(query, params):
     """
