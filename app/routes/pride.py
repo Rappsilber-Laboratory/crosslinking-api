@@ -745,7 +745,7 @@ async def protein_search(project_id: Annotated[str, Path(...,
         logging.error(f"Error occurred: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
-    if not proteins_list:
+    if not proteins_list and page == 1:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="proteins not found")
 
     response = {
@@ -754,7 +754,7 @@ async def protein_search(project_id: Annotated[str, Path(...,
             "page_no": page,
             "page_size": page_size,
             "total_elements": total_elements,
-            "total_pages": ceil(total_elements / page_size),
+            "total_pages": ceil(total_elements / page_size) if total_elements else 0,
         }
     }
 
