@@ -65,7 +65,7 @@ def visualisations(project_id: str, session: Session = Depends(get_session)):
 
 
 @log_execution_time_async
-@xiview_data_router.get('/get_xiview_mzidentml_files', tags=["xiVIEW"])
+@xiview_data_router.get('/get_xiview_mzidentml_files', summary="mzIdentML File Info",tags=["xiVIEW"])
 async def get_xiview_mzidentml_files(project, file=None):
     """
     Get info on the mzidentml files used in the xiVIEW visualisation.
