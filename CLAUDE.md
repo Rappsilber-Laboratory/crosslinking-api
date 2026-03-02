@@ -26,7 +26,7 @@ pipenv install --dev
 python main.py
 
 # The server will start on the port specified in database.ini (default: 8080)
-# Access API docs at: http://localhost:{port}/pride/ws/archive/crosslinking/v2/docs
+# Access API docs at: http://localhost:{port}/pride/ws/archive/crosslinking/v3/docs
 ```
 
 ### Testing
@@ -60,7 +60,7 @@ External models imported from separate package covering:
 - Database sequences and analysis results
 
 ### API Versioning
-- Base URL: `/pride/ws/archive/crosslinking/v2/`
+- Base URL: `/pride/ws/archive/crosslinking/v3/`
 - Version controlled through `API_VERSION` environment variable
 - OpenAPI documentation auto-generated
 

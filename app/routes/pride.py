@@ -9,8 +9,9 @@ from typing import List, Annotated, Union
 
 import redis
 import requests
-from fastapi import APIRouter, Depends, status, Query, Path
+from fastapi import APIRouter, Depends, status, Query, Path, UploadFile, File
 from fastapi import HTTPException, Security
+from fastapi.responses import FileResponse
 from models.upload import Upload
 from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
@@ -33,7 +34,7 @@ from models.spectrumidentificationprotocol import SpectrumIdentificationProtocol
 from app.routes.shared import get_api_key
 from db_config_parser import redis_config
 from index import get_session
-from process_dataset import convert_pxd_accession_from_pride
+from parser.process_dataset import convert_pxd_accession_from_pride
 
 logger = logging.getLogger(__name__)
 pride_router = APIRouter()
@@ -98,7 +99,7 @@ async def parse(px_accession: str, temp_dir: str | None = None, dont_delete: boo
         temp_dir = os.path.expanduser(temp_dir)
     else:
         temp_dir = os.path.expanduser('~/mzId_convertor_temp')
-    convert_pxd_accession_from_pride(px_accession, temp_dir, dont_delete)
+    convert_pxd_accession_from_pride(px_accession, temp_dir, "db", dont_delete)
     # invalidate_cache()
     logger.info("Invalidated Cache")
 
@@ -489,6 +490,63 @@ async def delete_dataset(project_id: str, session: Session = Depends(get_session
         session.close()
 
 
+REPORT_DIR = os.environ.get(
+    "REPORT_DIR",
+    os.path.join(os.path.expanduser("~"), "mzId_convertor_temp", "reports"),
+)
+REPORT_FILENAME = "crosslinking_report.html"
+
+
+@pride_router.post("/report/upload", tags=["Admin"])
+async def upload_report(file: UploadFile = File(...),
+                        api_key: str = Security(get_api_key)):
+    """
+    Upload the crosslinking HTML report.
+    :param file: HTML report file
+    :param api_key: API KEY
+    :return: Success message
+    """
+    if not file.filename.endswith(".html"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only HTML files are accepted",
+        )
+    os.makedirs(REPORT_DIR, exist_ok=True)
+    report_path = os.path.join(REPORT_DIR, REPORT_FILENAME)
+    try:
+        contents = await file.read()
+        with open(report_path, "wb") as f:
+            f.write(contents)
+        logger.info(f"Report uploaded: {report_path} ({len(contents)} bytes)")
+        return {"message": "Report uploaded successfully", "filename": REPORT_FILENAME}
+    except Exception as e:
+        logger.error(f"Failed to upload report: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save report: {e}",
+        )
+
+
+@pride_router.get("/report/download", tags=["Admin"])
+async def download_report(api_key: str = Security(get_api_key)):
+    """
+    Download the crosslinking HTML report.
+    :param api_key: API KEY
+    :return: HTML report file
+    """
+    report_path = os.path.join(REPORT_DIR, REPORT_FILENAME)
+    if not os.path.exists(report_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No report has been uploaded yet",
+        )
+    return FileResponse(
+        path=report_path,
+        media_type="text/html",
+        filename=REPORT_FILENAME,
+    )
+
+
 @pride_router.get("/projects", tags=["Projects"], response_model=None)
 async def project_search(q: Union[str | None] = Query(default="",
                                                       alias="query",
@@ -561,7 +619,7 @@ async def project_search(q: Union[str | None] = Query(default="",
         offset = (page - 1) * page_size
         projects = session.query(ProjectDetail).filter(ProjectDetail.id.in_(list_of_ids)).offset(offset).limit(
             page_size).all()
-        total_elements = session.query(ProjectDetail).filter(ProjectDetail.id.in_(list_of_ids)).all().__len__()
+        total_elements = len(list_of_ids)
     except Exception as e:
         # Handle the exception here
         logging.error(f"Error occurred: {str(e)}")
@@ -624,18 +682,19 @@ async def protein_search(project_id: Annotated[str, Path(...,
     :return: List of ProjectDetails in JSON format
     """
     try:
-        where_condition = """project_detail_id IN (SELECT id FROM projectdetails WHERE project_id = :project_id)"""
+        where_condition = """ps.project_detail_id = pd.id AND pd.project_id = :project_id"""
 
         if q and q != '*' and q != 'all':
-            where_condition += """ AND (protein_accession LIKE '%' || :query || '%' 
-                     OR gene_name LIKE '%' || :query || '%' 
-                     OR protein_name LIKE '%' || :query || '%')
+            where_condition += """ AND (ps.protein_accession LIKE '%' || :query || '%'
+                     OR ps.gene_name LIKE '%' || :query || '%'
+                     OR ps.protein_name LIKE '%' || :query || '%')
             """
 
         sql = text(f"""
-            SELECT * FROM projectsubdetails 
+            SELECT ps.* FROM projectsubdetails ps
+            JOIN projectdetails pd ON ps.project_detail_id = pd.id
             WHERE {where_condition}
-            ORDER BY id
+            ORDER BY ps.id
             LIMIT :limit OFFSET :offset
         """)
 
@@ -648,7 +707,8 @@ async def protein_search(project_id: Annotated[str, Path(...,
         }
 
         sql_total_count = text(f"""
-                  SELECT id FROM projectsubdetails 
+                  SELECT COUNT(*) FROM projectsubdetails ps
+                  JOIN projectdetails pd ON ps.project_detail_id = pd.id
                   WHERE {where_condition}
               """)
 
@@ -660,8 +720,7 @@ async def protein_search(project_id: Annotated[str, Path(...,
 
         # Execute the SQL query
         result = session.execute(sql, sql_values)
-        result_total = session.execute(sql_total_count, sql_values_total_count)
-        total_elements = result_total.all().__len__()
+        total_elements = session.execute(sql_total_count, sql_values_total_count).scalar()
         proteins = result.fetchall()
 
         # Convert rows to a list of ProjectSubDetail objects
@@ -686,7 +745,7 @@ async def protein_search(project_id: Annotated[str, Path(...,
         logging.error(f"Error occurred: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal Server Error")
 
-    if not proteins_list:
+    if not proteins_list and page == 1:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="proteins not found")
 
     response = {
@@ -695,7 +754,7 @@ async def protein_search(project_id: Annotated[str, Path(...,
             "page_no": page,
             "page_size": page_size,
             "total_elements": total_elements,
-            "total_pages": ceil(total_elements / page_size),
+            "total_pages": ceil(total_elements / page_size) if total_elements else 0,
         }
     }
 
@@ -850,6 +909,63 @@ def invalidate_cache(redis_config_param=Depends(redis_config)):
     key = redis_config_param['peptide_per_protein']
     redis_client.delete(key)
     return None
+
+
+def _extract_labheads_from_proxi(proxi_json):
+    """Extract lab head names from a ProteomeXchange PROXI dataset response."""
+    labheads = []
+    for contact in proxi_json.get("contacts", []):
+        terms = contact.get("terms", [])
+        is_labhead = any(t.get("accession") == "MS:1002332" for t in terms)
+        if is_labhead:
+            for t in terms:
+                if t.get("accession") == "MS:1000586" and t.get("value"):
+                    labheads.append(t["value"])
+    return labheads
+
+
+@pride_router.get("/labhead-count", tags=["Statistics"])
+async def labhead_count(session: Session = Depends(get_session),
+                        redis_config_param=Depends(redis_config)):
+    values = None
+    try:
+        key = redis_config_param.get('labhead_count', 'labhead_count')
+        redis_client = redis.Redis(host=redis_config_param['host'],
+                                   port=redis_config_param['port'],
+                                   password=redis_config_param['password'],
+                                   decode_responses=False)
+        if redis_client is not None and redis_client.exists(key):
+            values = redis_client.get(key)
+            return json.loads(values)
+        else:
+            sql_project_accession_list = text("""
+                SELECT DISTINCT u.project_id FROM upload u
+            """)
+            list_of_project_id = await get_accessions(sql_project_accession_list, {}, session)
+
+            labhead_set = set()
+            proxi_base_url = "https://proteomecentral.proteomexchange.org/api/proxi/v0.1/datasets/"
+            for project_id in list_of_project_id:
+                try:
+                    response = requests.get(proxi_base_url + project_id, timeout=30)
+                    if response.status_code == 200:
+                        names = _extract_labheads_from_proxi(response.json())
+                        labhead_set.update(names)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch PROXI data for {project_id}: {e}")
+
+            values = {
+                "labhead_count": len(labhead_set)
+            }
+
+            if values:
+                redis_client.set(key, json.dumps(values))
+                return values
+            else:
+                return None
+    except Exception as error:
+        logger.error(error)
+    return values
 
 
 async def update_protein_metadata(list_of_project_sub_details):
