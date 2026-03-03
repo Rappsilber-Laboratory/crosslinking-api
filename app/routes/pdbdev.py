@@ -108,13 +108,10 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
                f"Valid values are: passing, all", 400
 
     most_recent_upload_ids = await get_most_recent_upload_ids(project_id)
-    data = {}
-    response = {}
-    try:
-        sql_values = [most_recent_upload_ids, page_size, (page - 1) * page_size] # todo - yucky, use named param's instead
+    sql_values = [most_recent_upload_ids, page_size, (page - 1) * page_size] # todo - yucky, use named param's instead
 
-        if passing_threshold.lower() == Threshold.passing:
-            sql = """SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files, 
+    if passing_threshold.lower() == Threshold.passing:
+            sql = """SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files,
             pe1.dbsequence_id as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
             pe2.dbsequence_id as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2,
 			coalesce (mp1.crosslinker_accession, mp2.crosslinker_accession) as crosslinker_accession
@@ -131,7 +128,7 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
             GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1), mp1.crosslinker_accession, mp2.crosslinker_accession
             ORDER BY pe1.dbsequence_id , (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, (pe2.pep_start + mp2.link_site1 - 1)
             LIMIT $2 OFFSET $3;"""
-        else:
+    else:
             sql = """SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files,
             pe1.dbsequence_id as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
             pe2.dbsequence_id as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2,
@@ -149,8 +146,8 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
             ORDER BY pe1.dbsequence_id , (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, (pe2.pep_start + mp2.link_site1 - 1)
             LIMIT $2 OFFSET $3;"""
 
-        if passing_threshold.lower() == Threshold.passing:
-            count_sql = """SELECT count(*) FROM (SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files, 
+    if passing_threshold.lower() == Threshold.passing:
+            count_sql = """SELECT count(*) FROM (SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files,
             pe1.dbsequence_id as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
             pe2.dbsequence_id as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2
             FROM match si INNER JOIN
@@ -165,7 +162,7 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
             AND si.pass_threshold = true
             GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
             ) as count;"""
-        else:
+    else:
             count_sql = """SELECT count(*) FROM (SELECT array_agg(si.id) as match_ids, array_agg(u.identification_file_name) as files,
             pe1.dbsequence_id as prot1, dbs1.accession as prot1_acc, (pe1.pep_start + mp1.link_site1 - 1) as pos1,
             pe2.dbsequence_id as prot2, dbs2.accession as prot2_acc, (pe2.pep_start + mp2.link_site1 - 1) as pos2
@@ -181,26 +178,23 @@ async def get_psm_level_residue_pairs(project_id: Annotated[str, Path(...,
             GROUP BY pe1.dbsequence_id , dbs1.accession, (pe1.pep_start + mp1.link_site1 - 1), pe2.dbsequence_id, dbs2.accession , (pe2.pep_start + mp2.link_site1 - 1)
             ) as count;"""
 
-        result = await execute_query(count_sql, [most_recent_upload_ids], True)
-        total_elements = result["count"]
+    result = await execute_query(count_sql, [most_recent_upload_ids], True)
+    total_elements = result["count"]
 
-        # Calculate the total pages based on the page size and total elements
-        total_pages = math.ceil(total_elements / page_size)
-        data = await execute_query(sql, sql_values)
-        response = {
-            "data": [dict(record) for record in data],
-            "page": {
-                "page_no": page,
-                "page_size": page_size,
-                "total_elements": total_elements,
-                "total_pages": total_pages
-            }
+    # Calculate the total pages based on the page size and total elements
+    total_pages = math.ceil(total_elements / page_size)
+    data = await execute_query(sql, sql_values)
+    response = {
+        "data": [dict(record) for record in data],
+        "page": {
+            "page_no": page,
+            "page_size": page_size,
+            "total_elements": total_elements,
+            "total_pages": total_pages
         }
+    }
 
-        print("finished")
-    except (Exception, psycopg2.DatabaseError) as error:
-        print(error)
-        traceback.print_exc()
+    print("finished")
     return Response(orjson.dumps(response), media_type='application/json')
 
 
