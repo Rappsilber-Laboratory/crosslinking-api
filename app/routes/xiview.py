@@ -400,4 +400,4 @@ async def get_matches_by_multiple_spectra_id(upload_id: int, multiple_spectra_id
 async def get_datasets():
     query = """SELECT DISTINCT project_id, identification_file_name FROM upload;"""
     data = await execute_query(query)
-    return Response(orjson.dumps(data), media_type='application/json')
+    return Response(orjson.dumps([dict(r) for r in data]), media_type='application/json')
