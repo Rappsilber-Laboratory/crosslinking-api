@@ -1,0 +1,21 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = [
+    "--cov=app",
+    "--cov=db_config_parser",
+    "--cov-report=html",
+    "--cov-report=term-missing",
+    "--cov-branch",
+    "--strict-markers",
+    "-v",
+]
+markers = [
+    "unit: pure unit tests, no external dependencies",
+    "integration: requires a live PostgreSQL test database",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+omit = ["tests/*", "main.py"]
