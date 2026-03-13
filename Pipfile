@@ -27,6 +27,7 @@ mzidentml-reader = "*"
 redis = "*"
 hiredis = "*"
 asyncpg = "*"
+xi2annotator = "*"
 
 [dev-packages]
 pytest = "*"
