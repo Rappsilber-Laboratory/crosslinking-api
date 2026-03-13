@@ -9,11 +9,11 @@ ENV PYTHONUNBUFFERED 1
 
 # Install pipenv and compilation dependencies
 RUN python3 -m pip install wheel pip --upgrade && pip install pipenv
-RUN apt-get update && apt-get install
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
 
 COPY Pipfile .
 COPY Pipfile.lock .
-RUN PIPENV_VENV_IN_PROJECT=1 pipenv install --system
+RUN pipenv requirements > /tmp/requirements.txt && pip install -r /tmp/requirements.txt
 
 # Create and switch to a new user to ensure security
 RUN useradd --create-home appuser
