@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from models.upload import Upload
 from app.routes.shared import (
     log_execution_time_async, execute_query, fetch_json_response,
+    get_cached_response, set_cached_response, build_xiview_cache_key,
 )
 from index import get_session
 from db_config_parser import get_xiview_base_url
@@ -91,6 +92,11 @@ async def get_xiview_spectrum_identification_protocols(project):
         row_dict = dict(row)
         if isinstance(row_dict.get('s_config'), (str, bytes)):
             row_dict['s_config'] = orjson.loads(row_dict['s_config'])
+        if isinstance(row_dict.get('rs_config'), (str, bytes)):
+            try:
+                row_dict['rs_config'] = orjson.loads(row_dict['rs_config'])
+            except orjson.JSONDecodeError:
+                pass  # not JSON — leave as raw string
         resultsets[str(row_dict['id'])] = row_dict
 
     return Response(orjson.dumps(resultsets, default=str), media_type='application/json')
@@ -126,6 +132,11 @@ async def get_xiview_matches(project):
 
     resultset_ids = [project] if isinstance(project, str) else project
 
+    # cache_key = build_xiview_cache_key("xi2_matches", project if isinstance(project, str) else ",".join(project))
+    # cached = get_cached_response(cache_key)
+    # if cached:
+    #     return Response(content=cached, media_type='application/json')
+
     score_query = """SELECT sn.name AS score_name, sn.score_id AS score_index, sn.higher_is_better AS higher_better
                 FROM scorename AS sn
                 WHERE sn.resultset_id = ANY($1::uuid[]) AND sn.primary_score = TRUE
@@ -160,6 +171,7 @@ async def get_xiview_matches(project):
     t1 = time.time()
     json_bytes = orjson.dumps([dict(r) for r in records], default=str)
     logger.info(f"get_xiview_matches: json conversion took {time.time()-t1:.2f}s, {len(json_bytes)/1024:.0f}KB")
+    # set_cached_response(cache_key, json_bytes)
     return Response(content=json_bytes, media_type='application/json')
 
 
@@ -172,6 +184,11 @@ async def get_xiview_peptides(project):
     :return: json of the peptides
     """
     logger.info(f"get_xiview_peptides for {project}")
+
+    # cache_key = build_xiview_cache_key("xi2_peptides", project if isinstance(project, str) else ",".join(project))
+    # cached = get_cached_response(cache_key)
+    # if cached:
+    #     return Response(content=cached, media_type='application/json')
 
     query = """WITH submatch AS (
                     SELECT m.pep1_id, m.pep2_id, m.search_id
@@ -187,17 +204,15 @@ async def get_xiview_peptides(project):
                     SELECT search_id, pep2_id FROM submatch
                 )
                 SELECT mp.id,
-                       mp.search_id AS search_id,
-                       mp.sequence AS seq_mods,
-                       mp.modification_ids AS mod_ids,
-                       mp.modification_position AS mod_pos,
-                       array_agg(p.accession) AS prt,
-                       array_agg(pp.start) AS pos,
-                       array_agg(p.is_decoy) AS dec
+                       mp.search_id AS u_id,
+                       mp.sequence AS seq,
+                       mp.modification_ids AS m_as,
+                       mp.modification_position AS m_ps,
+                       array_agg(pp.protein_id) AS prt,
+                       array_agg(pp.start) AS pos
                 FROM pep_ids pi
                 INNER JOIN modifiedpeptide mp ON mp.search_id = pi.search_id AND mp.id = pi.pep_id
                 JOIN peptideposition pp ON pp.mod_pep_id = mp.id AND pp.search_id = mp.search_id
-                JOIN protein p ON p.id = pp.protein_id AND p.search_id = pp.search_id
                 GROUP BY mp.id, mp.search_id, mp.sequence, mp.modification_ids, mp.modification_position;"""
 
     params = [[project] if isinstance(project, str) else project]
@@ -207,6 +222,7 @@ async def get_xiview_peptides(project):
     t1 = time.time()
     json_bytes = orjson.dumps([dict(r) for r in records], default=str)
     logger.info(f"get_xiview_peptides: json conversion took {time.time()-t1:.2f}s, {len(json_bytes)/1024:.0f}KB")
+    # set_cached_response(cache_key, json_bytes)
     return Response(content=json_bytes, media_type='application/json')
 
 
@@ -219,6 +235,11 @@ async def get_xiview_proteins(project):
     :return: json of the proteins
     """
     logger.info(f"get_xiview_proteins for {project}")
+
+    # cache_key = build_xiview_cache_key("xi2_proteins", project if isinstance(project, str) else ",".join(project))
+    # cached = get_cached_response(cache_key)
+    # if cached:
+    #     return Response(content=cached, media_type='application/json')
 
     query = """WITH submatch AS (
                     SELECT m.pep1_id, m.pep2_id, m.search_id
@@ -254,6 +275,7 @@ async def get_xiview_proteins(project):
     t1 = time.time()
     json_bytes = orjson.dumps([dict(r) for r in records], default=str)
     logger.info(f"get_xiview_proteins: json conversion took {time.time()-t1:.2f}s, {len(json_bytes)/1024:.0f}KB")
+    # set_cached_response(cache_key, json_bytes)
     return Response(content=json_bytes, media_type='application/json')
 
 
@@ -263,7 +285,7 @@ async def get_xiview_proteins(project):
 async def get_matches_by_multiple_spectra_id(upload_id: int, multiple_spectra_id: int):
     """
     Get all matches associated with a specific multiple_spectra_identification_id for a given upload.
-
+    //TODO - broken for xi2
     Parameters:
     - upload_id: The upload ID to filter matches
     - multiple_spectra_id: The multiple_spectra_identification_id to filter matches
