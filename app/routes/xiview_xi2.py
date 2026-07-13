@@ -102,10 +102,25 @@ async def get_xiview_spectrum_identification_protocols(project):
     return Response(orjson.dumps(resultsets, default=str), media_type='application/json')
 
 
+@log_execution_time_async
 @xiview_xi2_data_router.get('/get_xiview_spectra_data', tags=["xiVIEW"])
-async def get_xiview_spectra_data():
-    """Stub: not implemented for xi2 schema. Returns empty list."""
-    return Response(content=b'[]', media_type='application/json')
+async def get_xiview_spectra_data(project):
+    """
+    Get the peaklist (spectra source) files referenced by the given resultset UUIDs.
+
+    :return: json of the peaklists (id + name)
+    """
+    logger.info(f"get_xiview_spectra_data for {project}")
+
+    resultset_ids = [project] if isinstance(project, str) else project
+
+    query = """SELECT pl.id, pl.name
+                FROM peaklist AS pl
+                WHERE pl.search_id IN (
+                    SELECT rse.search_id FROM ResultSearch AS rse
+                    WHERE rse.resultset_id = ANY($1::uuid[])
+                );"""
+    return await fetch_json_response(query, [resultset_ids])
 
 
 @xiview_xi2_data_router.get('/get_xiview_enzymes', tags=["xiVIEW"])
@@ -190,6 +205,7 @@ async def get_xiview_peptides(project):
     # if cached:
     #     return Response(content=cached, media_type='application/json')
 
+    #todo - investigate lateral join - potential speed up
     query = """WITH submatch AS (
                     SELECT m.pep1_id, m.pep2_id, m.search_id
                     FROM ResultMatch rm
