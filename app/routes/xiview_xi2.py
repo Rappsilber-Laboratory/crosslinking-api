@@ -1,6 +1,5 @@
 import asyncio
 import logging.config
-import struct
 import time
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -23,25 +22,27 @@ logger = logging.getLogger(__name__)
 
 
 @xiview_xi2_data_router.get('/get_peaklist', tags=["xiVIEW"])
-async def get_peaklist(id, sd_ref, upload_id):
-    query = "SELECT intensity, mz FROM spectrum WHERE id = $1 AND spectra_data_id = $2 AND upload_id = $3"
-    data = await execute_query(query, [id, int(sd_ref), int(upload_id)], fetch_one=True)
-    # Create a new dictionary to store the unpacked values
+async def get_peaklist(id, sd_ref=None, upload_id=None):
+    # xi2 peaks live in spectrumpeaks (mz/intensity are native float arrays),
+    # keyed 1:1 to spectrum.id (spectrumpeaks.id -> spectrum.id). `id` is that
+    # spectrum id. sd_ref/upload_id are mzIdentML leftovers and are unused.
+    query = "SELECT mz, intensity FROM spectrumpeaks WHERE id = $1::uuid"
+    data = await execute_query(query, [id], fetch_one=True)
     unpacked_data = {
-        "intensity": struct.unpack('%sd' % (len(data['intensity']) // 8), data['intensity']),
-        "mz": struct.unpack('%sd' % (len(data['mz']) // 8), data['mz'])
+        "intensity": data['intensity'],
+        "mz": data['mz'],
     }
     return Response(orjson.dumps(unpacked_data), media_type='application/json')
 
 
 @xiview_xi2_data_router.post('/get_annotated_peaklist', tags=["xiVIEW"])
 async def get_annotated_peaklist(request: Request, id: str, sd_ref: str, upload_id: str):
-    # 1. Fetch peaks from DB (same query as get_peaklist)
-    query = "SELECT intensity, mz FROM spectrum WHERE id = $1 AND spectra_data_id = $2 AND upload_id = $3"
-    data = await execute_query(query, [id, int(sd_ref), int(upload_id)], fetch_one=True)
-    mz = struct.unpack('%sd' % (len(data['mz']) // 8), data['mz'])
-    intensity = struct.unpack('%sd' % (len(data['intensity']) // 8), data['intensity'])
-    peaks = [{"mz": m, "intensity": i} for m, i in zip(mz, intensity)]
+    # 1. Fetch peaks from DB (same query as get_peaklist). xi2 peaks live in
+    # spectrumpeaks (native float arrays), keyed 1:1 to spectrum.id; `id` is that
+    # spectrum id. sd_ref/upload_id are unused (mzIdentML leftovers).
+    query = "SELECT mz, intensity FROM spectrumpeaks WHERE id = $1::uuid"
+    data = await execute_query(query, [id], fetch_one=True)
+    peaks = [{"mz": m, "intensity": i} for m, i in zip(data['mz'], data['intensity'])]
 
     # 2. Inject peaks into annotation body
     body = await request.json()
@@ -108,18 +109,20 @@ async def get_xiview_spectra_data(project):
     """
     Get the peaklist (spectra source) files referenced by the given resultset UUIDs.
 
-    :return: json of the peaklists (id + name)
+    Shaped like the PRIDE spectra data: each row carries an upload_id (the resultset id,
+    which the matches reference as 'ui') so the frontend can index it per-upload and reuse
+    the mzIdentML code path. 'id' is the peaklist id, which the matches reference as 'sd'.
+
+    :return: json of the peaklists (upload_id + id + name)
     """
     logger.info(f"get_xiview_spectra_data for {project}")
 
     resultset_ids = [project] if isinstance(project, str) else project
 
-    query = """SELECT pl.id, pl.name
+    query = """SELECT rse.resultset_id AS upload_id, pl.id, pl.name
                 FROM peaklist AS pl
-                WHERE pl.search_id IN (
-                    SELECT rse.search_id FROM ResultSearch AS rse
-                    WHERE rse.resultset_id = ANY($1::uuid[])
-                );"""
+                JOIN ResultSearch AS rse ON rse.search_id = pl.search_id
+                WHERE rse.resultset_id = ANY($1::uuid[]);"""
     return await fetch_json_response(query, [resultset_ids])
 
 
@@ -158,6 +161,7 @@ async def get_xiview_matches(project):
                 LIMIT 1;"""
     main_score = await execute_query(score_query, [resultset_ids], fetch_one=True)
     main_score_index = main_score['score_index'] if main_score else 0
+    main_score_name = main_score['score_name'] if main_score else "score"
 
     query = """SELECT m.id AS id, m.pep1_id AS pi1, m.pep2_id AS pi2,
                     CASE WHEN rm.site1 IS NOT NULL THEN rm.site1 ELSE m.site1 END AS s1,
@@ -169,7 +173,7 @@ async def get_xiview_matches(project):
                     rm.resultset_id AS ui, rm.resultset_id AS sip,
                     s.precursor_intensity AS pc_i,
                     s.scan_number AS sn, s.scan_index AS sc_i,
-                    s.retention_time AS rt, r.name AS run, s.peaklist_id AS plf
+                    s.retention_time AS rt, r.name AS run, s.peaklist_id AS sd
                 FROM ResultMatch AS rm
                     JOIN match AS m ON rm.search_id = m.search_id AND rm.match_id = m.id
                     JOIN matchedspectrum AS ms ON rm.match_id = ms.match_id
@@ -184,7 +188,12 @@ async def get_xiview_matches(project):
     records = await execute_query(query, params)
     logger.info(f"get_xiview_matches: query took {time.time()-t0:.2f}s, {len(records)} rows")
     t1 = time.time()
-    json_bytes = orjson.dumps([dict(r) for r in records], default=str)
+    # xiVIEW expects `sc` to be a {scoreName: value} dict (matching the mzIdentML
+    # shape), so wrap the scalar primary score under its name.
+    rows = [dict(r) for r in records]
+    for row in rows:
+        row['sc'] = {main_score_name: row['sc']}
+    json_bytes = orjson.dumps(rows, default=str)
     logger.info(f"get_xiview_matches: json conversion took {time.time()-t1:.2f}s, {len(json_bytes)/1024:.0f}KB")
     # set_cached_response(cache_key, json_bytes)
     return Response(content=json_bytes, media_type='application/json')
