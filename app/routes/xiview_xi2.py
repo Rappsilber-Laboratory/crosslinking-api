@@ -67,15 +67,15 @@ async def get_xiview_analysis_collection_spectrum_identifications():
 
 @log_execution_time_async
 @xiview_xi2_data_router.get('/get_xiview_spectrum_identification_protocols', tags=["xiVIEW"])
-async def get_xiview_spectrum_identification_protocols(project):
+async def get_xiview_spectrum_identification_protocols(uuid):
     """
     Get search config info (resultset + search metadata) for the given resultset UUIDs.
 
     :return: json mapping resultset_id -> resultset/search metadata
     """
-    logger.info(f"get_xiview_spectrum_identification_protocols for {project}")
+    logger.info(f"get_xiview_spectrum_identification_protocols for {uuid}")
 
-    resultset_ids = [project] if isinstance(project, str) else project
+    resultset_ids = [uuid] if isinstance(uuid, str) else uuid
 
     query = """SELECT rs.name AS rs_name, rs.note AS rs_note, rs.config AS rs_config,
                     rs.main_score AS rs_main_score, rst.name AS resultset_type,
@@ -105,7 +105,7 @@ async def get_xiview_spectrum_identification_protocols(project):
 
 @log_execution_time_async
 @xiview_xi2_data_router.get('/get_xiview_spectra_data', tags=["xiVIEW"])
-async def get_xiview_spectra_data(project):
+async def get_xiview_spectra_data(uuid):
     """
     Get the peaklist (spectra source) files referenced by the given resultset UUIDs.
 
@@ -115,9 +115,9 @@ async def get_xiview_spectra_data(project):
 
     :return: json of the peaklists (upload_id + id + name)
     """
-    logger.info(f"get_xiview_spectra_data for {project}")
+    logger.info(f"get_xiview_spectra_data for {uuid}")
 
-    resultset_ids = [project] if isinstance(project, str) else project
+    resultset_ids = [uuid] if isinstance(uuid, str) else uuid
 
     query = """SELECT rse.resultset_id AS upload_id, pl.id, pl.name
                 FROM peaklist AS pl
@@ -140,15 +140,15 @@ async def get_xiview_search_modifications():
 
 @log_execution_time_async
 @xiview_xi2_data_router.get('/get_xiview_matches', tags=["xiVIEW"])
-async def get_xiview_matches(project):
+async def get_xiview_matches(uuid):
     """
     Get the passing matches.
 
     :return: json of the matches
     """
-    logger.info(f"get_xiview_matches for {project}")
+    logger.info(f"get_xiview_matches for {uuid}")
 
-    resultset_ids = [project] if isinstance(project, str) else project
+    resultset_ids = [uuid] if isinstance(uuid, str) else uuid
 
     # cache_key = build_xiview_cache_key("xi2_matches", project if isinstance(project, str) else ",".join(project))
     # cached = get_cached_response(cache_key)
@@ -201,13 +201,13 @@ async def get_xiview_matches(project):
 
 @log_execution_time_async
 @xiview_xi2_data_router.get('/get_xiview_peptides', tags=["xiVIEW"])
-async def get_xiview_peptides(project):
+async def get_xiview_peptides(uuid):
     """
     Get the peptides referenced by top-ranking matches for the given resultset UUIDs.
 
     :return: json of the peptides
     """
-    logger.info(f"get_xiview_peptides for {project}")
+    logger.info(f"get_xiview_peptides for {uuid}")
 
     # cache_key = build_xiview_cache_key("xi2_peptides", project if isinstance(project, str) else ",".join(project))
     # cached = get_cached_response(cache_key)
@@ -240,7 +240,7 @@ async def get_xiview_peptides(project):
                 JOIN peptideposition pp ON pp.mod_pep_id = mp.id AND pp.search_id = mp.search_id
                 GROUP BY mp.id, mp.search_id, mp.sequence, mp.modification_ids, mp.modification_position;"""
 
-    params = [[project] if isinstance(project, str) else project]
+    params = [[uuid] if isinstance(uuid, str) else uuid]
     t0 = time.time()
     records = await execute_query(query, params)
     logger.info(f"get_xiview_peptides: query took {time.time()-t0:.2f}s, {len(records)} rows")
@@ -253,13 +253,13 @@ async def get_xiview_peptides(project):
 
 @log_execution_time_async
 @xiview_xi2_data_router.get('/get_xiview_proteins', tags=["xiVIEW"])
-async def get_xiview_proteins(project):
+async def get_xiview_proteins(uuid):
     """
     Get the proteins referenced by top-ranking matches for the given resultset UUIDs.
 
     :return: json of the proteins
     """
-    logger.info(f"get_xiview_proteins for {project}")
+    logger.info(f"get_xiview_proteins for {uuid}")
 
     # cache_key = build_xiview_cache_key("xi2_proteins", project if isinstance(project, str) else ",".join(project))
     # cached = get_cached_response(cache_key)
@@ -293,7 +293,7 @@ async def get_xiview_proteins(project):
                 FROM protein p
                 JOIN protein_ids x ON p.search_id = x.search_id AND p.id = x.protein_id;"""
 
-    params = [[project] if isinstance(project, str) else project]
+    params = [[uuid] if isinstance(uuid, str) else uuid]
     t0 = time.time()
     records = await execute_query(query, params)
     logger.info(f"get_xiview_proteins: query took {time.time()-t0:.2f}s, {len(records)} rows")
