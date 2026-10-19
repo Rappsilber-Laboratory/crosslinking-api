@@ -1,8 +1,10 @@
 import asyncio
 import logging.config
 import time
+from typing import List, Optional
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
 import orjson
 from sqlalchemy.orm import Session
 
@@ -349,3 +351,58 @@ async def get_datasets():
     query = """SELECT DISTINCT project_id, identification_file_name FROM upload;"""
     data = await execute_query(query)
     return Response(orjson.dumps([dict(r) for r in data]), media_type='application/json')
+
+
+# Saved xiVIEW configs (xiNET layout + filter settings). Not named get_xiview_* so that
+# api.py doesn't give them a long browser cache; they change whenever someone saves.
+NO_STORE = {"Cache-Control": "no-store"}
+
+
+def _normalise_resultset_ids(uuid: List[str]) -> List[str]:
+    """Sort and de-duplicate, so the same datasets in any URL order share configs."""
+    try:
+        return sorted({str(UUID(u)) for u in uuid})
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid uuid")
+
+
+@xiview_xi2_data_router.get('/configs', tags=["xiVIEW"])
+async def get_configs(uuid: List[str] = Query(...)):
+    """List saved configs for the given resultset UUIDs, newest first (no config bodies)."""
+    resultset_ids = _normalise_resultset_ids(uuid)
+    query = """SELECT id, name, created FROM xiview_config
+                WHERE resultset_ids = $1::uuid[]
+                ORDER BY created DESC;"""
+    records = await execute_query(query, [resultset_ids])
+    return Response(orjson.dumps([dict(r) for r in records]), media_type='application/json', headers=NO_STORE)
+
+
+@xiview_xi2_data_router.get('/config', tags=["xiVIEW"])
+async def get_config(uuid: List[str] = Query(...), config_id: Optional[int] = None):
+    """Get one saved config: the given config_id, or else the most recent. null if none saved."""
+    resultset_ids = _normalise_resultset_ids(uuid)
+    query = """SELECT id, name, created, config FROM xiview_config
+                WHERE resultset_ids = $1::uuid[] AND ($2::bigint IS NULL OR id = $2)
+                ORDER BY created DESC
+                LIMIT 1;"""
+    record = await execute_query(query, [resultset_ids, config_id], fetch_one=True)
+    result = None
+    if record:
+        result = dict(record)
+        result['config'] = orjson.loads(result['config'])
+    return Response(orjson.dumps(result), media_type='application/json', headers=NO_STORE)
+
+
+@xiview_xi2_data_router.post('/config', tags=["xiVIEW"])
+async def save_config(uuid: List[str] = Query(...), name: str = Body(""), config: dict = Body(...)):
+    """Save a new config (history is kept; nothing is overwritten). Anyone with the URL may save."""
+    resultset_ids = _normalise_resultset_ids(uuid)
+    count = await execute_query("SELECT count(*) FROM resultset WHERE id = ANY($1::uuid[]);",
+                                [resultset_ids], fetch_one=True)
+    if count[0] != len(resultset_ids):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown resultset uuid")
+    query = """INSERT INTO xiview_config (resultset_ids, name, config)
+                VALUES ($1::uuid[], $2, $3::jsonb)
+                RETURNING id, created;"""
+    record = await execute_query(query, [resultset_ids, name, orjson.dumps(config).decode()], fetch_one=True)
+    return Response(orjson.dumps(dict(record)), media_type='application/json', headers=NO_STORE)
