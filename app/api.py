@@ -9,6 +9,7 @@ from app.routes.pride import pride_router
 from app.routes.pdbdev import pdbdev_router
 from app.routes.xiview import xiview_data_router
 from app.routes.xiview_xi2 import xiview_xi2_data_router
+from app.routes.matrix_xi2 import matrix_xi2_router
 from app.routes.parse import parser_router
 from app.routes.shared import init_db_pool, close_db_pool
 from fastapi.middleware.gzip import GZipMiddleware
@@ -108,6 +109,7 @@ app.include_router(pride_router, prefix="/pride/ws/archive/crosslinking/" + API_
 app.include_router(pdbdev_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/pdbihm", tags=["PDB-IHM"])
 app.include_router(xiview_data_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/data")
 app.include_router(xiview_xi2_data_router, prefix="/xi2/data")
+app.include_router(matrix_xi2_router, prefix="/xi2/matrix")
 app.include_router(parser_router, prefix="/pride/ws/archive/crosslinking/" + API_VERSION + "/parse")
 
 
