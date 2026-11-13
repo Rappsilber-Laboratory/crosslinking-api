@@ -123,6 +123,95 @@ class TestGetXiviewProteins:
         assert resp.json() == []
 
 
+# endpoint -> (JSON fields of the key that identifies a row, in order, matching the after_* params)
+PAGED_ENDPOINTS = {
+    "get_xiview_matches": ("ui", "id"),
+    "get_xiview_peptides": ("u_id", "id"),
+    "get_xiview_proteins": ("search_id", "id"),
+}
+
+
+def _row_key(row, key_fields):
+    return tuple(str(row[f]) for f in key_fields)
+
+
+def _fetch_all_pages(client, endpoint, key_fields, limit):
+    """Follow the after_* cursor from page to page until a short page; returns (rows, number of requests)."""
+    rows, requests, after = [], 0, None
+    while True:
+        url = f"{DATA_PREFIX}/{endpoint}?project=ECOLI_MZML&limit={limit}"
+        if after:
+            url += f"&after_upload_id={after[0]}&after_id={after[1]}"
+        resp = client.get(url)
+        assert resp.status_code == 200, resp.text
+        page = resp.json()
+        requests += 1
+        assert len(page) <= limit
+        rows.extend(page)
+        if len(page) < limit:
+            return rows, requests
+        after = (page[-1][key_fields[0]], page[-1][key_fields[1]])
+        assert requests < 100, "paging doesn't terminate"
+
+
+@pytest.mark.integration
+class TestPaging:
+    @pytest.mark.parametrize("endpoint", PAGED_ENDPOINTS)
+    @pytest.mark.parametrize("limit", [1, 3, 5, 1000])
+    def test_pages_add_up_to_full_response(self, client, endpoint, limit):
+        key_fields = PAGED_ENDPOINTS[endpoint]
+        full = client.get(f"{DATA_PREFIX}/{endpoint}?project=ECOLI_MZML").json()
+        paged, requests = _fetch_all_pages(client, endpoint, key_fields, limit)
+        paged_keys = [_row_key(r, key_fields) for r in paged]
+        assert len(paged_keys) == len(set(paged_keys)), "a row came back on more than one page"
+        assert sorted(paged_keys) == sorted(_row_key(r, key_fields) for r in full)
+        assert requests == len(full) // limit + 1
+        # whole rows match too, not just keys
+        full_by_key = {_row_key(r, key_fields): r for r in full}
+        assert all(full_by_key[_row_key(r, key_fields)] == r for r in paged)
+
+    @pytest.mark.parametrize("endpoint", PAGED_ENDPOINTS)
+    def test_offset_pages_add_up_to_full_response(self, client, endpoint):
+        key_fields = PAGED_ENDPOINTS[endpoint]
+        full = client.get(f"{DATA_PREFIX}/{endpoint}?project=ECOLI_MZML").json()
+        paged = []
+        for offset in range(0, len(full) + 4, 4):
+            paged.extend(client.get(f"{DATA_PREFIX}/{endpoint}?project=ECOLI_MZML&limit=4&offset={offset}").json())
+        assert sorted(_row_key(r, key_fields) for r in paged) == sorted(_row_key(r, key_fields) for r in full)
+        assert len(paged) == len(full)
+
+    @pytest.mark.parametrize("endpoint", PAGED_ENDPOINTS)
+    def test_pages_are_stable(self, client, endpoint):
+        url = f"{DATA_PREFIX}/{endpoint}?project=ECOLI_MZML&limit=5"
+        assert client.get(url).json() == client.get(url).json()
+
+    @pytest.mark.parametrize("query", [
+        "after_upload_id=1&after_id=1",  # after needs limit
+        "offset=2",  # offset needs limit
+        "limit=2&after_upload_id=1",  # after_* params go together
+        "limit=2&offset=2&after_upload_id=1&after_id=1",  # either after or offset
+    ])
+    def test_bad_paging_params_return_422(self, client, query):
+        resp = client.get(f"{DATA_PREFIX}/get_xiview_matches?project=ECOLI_MZML&{query}")
+        assert resp.status_code == 422
+
+
+@pytest.mark.integration
+class TestGetXiviewCounts:
+    def test_counts_match_full_responses(self, client):
+        counts = client.get(f"{DATA_PREFIX}/get_xiview_counts?project=ECOLI_MZML").json()
+        assert counts == {
+            "matches": len(client.get(f"{DATA_PREFIX}/get_xiview_matches?project=ECOLI_MZML").json()),
+            "peptides": len(client.get(f"{DATA_PREFIX}/get_xiview_peptides?project=ECOLI_MZML").json()),
+            "proteins": len(client.get(f"{DATA_PREFIX}/get_xiview_proteins?project=ECOLI_MZML").json()),
+        }
+        assert counts == {"matches": 22, "peptides": 38, "proteins": 12}
+
+    def test_unknown_project_returns_zeros(self, client):
+        counts = client.get(f"{DATA_PREFIX}/get_xiview_counts?project=DOESNOTEXIST").json()
+        assert counts == {"matches": 0, "peptides": 0, "proteins": 0}
+
+
 @pytest.mark.integration
 class TestGetAnnotatedPeaklist:
     ENDPOINT = f"{DATA_PREFIX}/get_annotated_peaklist"

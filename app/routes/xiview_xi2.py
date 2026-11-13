@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from models.upload import Upload
 from app.routes.shared import (
     log_execution_time_async, execute_query, fetch_json_response,
-    get_cached_response, set_cached_response, build_xiview_cache_key,
+    get_cached_response, set_cached_response, build_xiview_cache_key, KeysetPage, any_after,
 )
 from index import get_session
 from db_config_parser import get_xiview_base_url
@@ -156,17 +156,106 @@ async def get_xiview_search_modifications():
     return Response(content=b'[]', media_type='application/json')
 
 
+def _cursor_value(value: Optional[str]):
+    """
+    An after_* param as a query value: int if it's all digits (bigint key columns), else the string
+    (uuid key columns; asyncpg takes str for uuid). Keeps the paging code independent of which xi2
+    key columns are uuids and which are integers.
+    """
+    if value is None:
+        return None
+    return int(value) if value.lstrip('-').isdigit() else value
+
+
+# A matches row is a (resultset, match, spectrum), so the paging key is all of those.
+_MATCH_KEY = ["rm.resultset_id", "m.search_id", "m.id", "ms.spectrum_id"]
+
+
+def _matches_from_where(resultset_ids_param: int) -> str:
+    """FROM ... WHERE of the matches query, with the resultset ids as $resultset_ids_param."""
+    return f"""FROM ResultMatch AS rm
+                    JOIN match AS m ON rm.search_id = m.search_id AND rm.match_id = m.id
+                    JOIN matchedspectrum AS ms ON rm.match_id = ms.match_id
+                    JOIN spectrum AS s ON ms.spectrum_id = s.id
+                    JOIN run AS r ON s.run_id = r.id
+                WHERE rm.resultset_id = ANY(${resultset_ids_param}::uuid[])
+                    AND m.site1 > 0 AND m.site2 > 0
+                    AND rm.top_ranking = TRUE"""
+
+
+_PEPTIDE_KEY = ["mp.search_id", "mp.id"]
+_PROTEIN_KEY = ["p.search_id", "p.id"]
+
+
+def _pep_ids_cte(page: Optional[KeysetPage] = None) -> str:
+    """
+    CTEs for the peptides of the top-ranking matches; $1 is the resultset ids.
+    With a (peptides) page, pep_ids is cut down to the page's cursor too (see KeysetPage).
+    """
+    page = page or KeysetPage(_PEPTIDE_KEY, None, None, 0, [])
+    return f"""WITH submatch AS (
+                    SELECT m.pep1_id, m.pep2_id, m.search_id
+                    FROM ResultMatch rm
+                    JOIN match m ON rm.search_id = m.search_id AND rm.match_id = m.id
+                    WHERE rm.resultset_id = ANY($1::uuid[])
+                      AND m.site1 > 0 AND m.site2 > 0
+                      AND rm.top_ranking = TRUE
+                ),
+                pep_ids AS (
+                    SELECT search_id, pep1_id AS pep_id FROM submatch{page.filter(["search_id", "pep1_id"], "WHERE")}
+                    UNION
+                    SELECT search_id, pep2_id FROM submatch{page.filter(["search_id", "pep2_id"], "WHERE")}
+                )"""
+
+
+_PEPTIDES_FROM = """FROM pep_ids pi
+                INNER JOIN modifiedpeptide mp ON mp.search_id = pi.search_id AND mp.id = pi.pep_id
+                JOIN peptideposition pp ON pp.mod_pep_id = mp.id AND pp.search_id = mp.search_id"""
+
+
+def _protein_ids_cte(page: Optional[KeysetPage] = None) -> str:
+    """
+    CTEs for the proteins of the top-ranking matches' peptides; $1 is the resultset ids.
+    With a (proteins) page, protein_ids is cut down to the page's cursor too (see KeysetPage).
+    """
+    page = page or KeysetPage(_PROTEIN_KEY, None, None, 0, [])
+    return _pep_ids_cte() + f""",
+                protein_ids AS (
+                    SELECT DISTINCT pp.search_id, pp.protein_id
+                    FROM peptideposition pp
+                    JOIN pep_ids pi ON pi.search_id = pp.search_id AND pi.pep_id = pp.mod_pep_id
+                    {page.filter(["pp.search_id", "pp.protein_id"], "WHERE")}
+                )"""
+
+
+_PROTEINS_FROM = """FROM protein p
+                JOIN protein_ids x ON p.search_id = x.search_id AND p.id = x.protein_id"""
+
+_LIMIT_QUERY = Query(None, ge=1, le=100000, description="Max rows to return (paging)")
+
+
 @log_execution_time_async
 @xiview_xi2_data_router.get('/get_xiview_matches', tags=["xiVIEW"])
-async def get_xiview_matches(uuid: List[str] = Query(...)):
+async def get_xiview_matches(uuid: List[str] = Query(...),
+                             limit: int = _LIMIT_QUERY,
+                             after_resultset_id: str = Query(None, description="`rs_id` of the last row of the previous page"),
+                             after_search_id: str = Query(None, description="`si` of the last row of the previous page"),
+                             after_id: str = Query(None, description="`id` of the last row of the previous page"),
+                             after_spectrum_id: str = Query(None, description="`sp` of the last row of the previous page")):
     """
     Get the passing matches.
 
+    Paging: with `limit`, rows are ordered by (rs_id, si, id, sp); pass those of the last row as
+    after_resultset_id, after_search_id, after_id and after_spectrum_id to get the next page.
+    The last page has fewer than `limit` rows.
+
     :return: json of the matches
     """
-    logger.info(f"get_xiview_matches for {uuid}")
+    logger.info(f"get_xiview_matches for {uuid}, limit: {limit}, after: {after_resultset_id}/{after_search_id}/"
+                f"{after_id}/{after_spectrum_id}")
 
     resultset_ids = _parse_resultset_ids(uuid)
+    after = any_after(*(_cursor_value(v) for v in (after_resultset_id, after_search_id, after_id, after_spectrum_id)))
 
     # cache_key = build_xiview_cache_key("xi2_matches", project if isinstance(project, str) else ",".join(project))
     # cached = get_cached_response(cache_key)
@@ -181,7 +270,9 @@ async def get_xiview_matches(uuid: List[str] = Query(...)):
     main_score_index = main_score['score_index'] if main_score else 0
     main_score_name = main_score['score_name'] if main_score else "score"
 
-    query = """SELECT m.id AS id, m.pep1_id AS pi1, m.pep2_id AS pi2,
+    params = [main_score_index, resultset_ids]
+    page = KeysetPage(_MATCH_KEY, after, limit, 0, params)
+    query = f"""SELECT m.id AS id, m.pep1_id AS pi1, m.pep2_id AS pi2,
                     CASE WHEN rm.site1 IS NOT NULL THEN rm.site1 ELSE m.site1 END AS s1,
                     CASE WHEN rm.site2 IS NOT NULL THEN rm.site2 ELSE m.site2 END AS s2,
                     rm.scores[$1 + array_lower(rm.scores, 1)] AS sc,
@@ -192,16 +283,8 @@ async def get_xiview_matches(uuid: List[str] = Query(...)):
                     s.precursor_intensity AS pc_i,
                     s.scan_number AS sn, s.scan_index AS sc_i,
                     s.retention_time AS rt, r.name AS run, s.peaklist_id AS sd
-                FROM ResultMatch AS rm
-                    JOIN match AS m ON rm.search_id = m.search_id AND rm.match_id = m.id
-                    JOIN matchedspectrum AS ms ON rm.match_id = ms.match_id
-                    JOIN spectrum AS s ON ms.spectrum_id = s.id
-                    JOIN run AS r ON s.run_id = r.id
-                WHERE rm.resultset_id = ANY($2::uuid[])
-                    AND m.site1 > 0 AND m.site2 > 0
-                    AND rm.top_ranking = TRUE;"""
+                {_matches_from_where(2)}{page.filter()}{page.order_limit};"""
 
-    params = [main_score_index, resultset_ids]
     t0 = time.time()
     records = await execute_query(query, params)
     logger.info(f"get_xiview_matches: query took {time.time()-t0:.2f}s, {len(records)} rows")
@@ -219,33 +302,31 @@ async def get_xiview_matches(uuid: List[str] = Query(...)):
 
 @log_execution_time_async
 @xiview_xi2_data_router.get('/get_xiview_peptides', tags=["xiVIEW"])
-async def get_xiview_peptides(uuid: List[str] = Query(...)):
+async def get_xiview_peptides(uuid: List[str] = Query(...),
+                              limit: int = _LIMIT_QUERY,
+                              after_search_id: str = Query(None, description="`u_id` of the last row of the previous page"),
+                              after_id: str = Query(None, description="`id` of the last row of the previous page")):
     """
     Get the peptides referenced by top-ranking matches for the given resultset UUIDs.
 
+    Paging: with `limit`, rows are ordered by (u_id, id); pass those of the last row as
+    after_search_id and after_id to get the next page. The last page has fewer than `limit` rows.
+
     :return: json of the peptides
     """
-    logger.info(f"get_xiview_peptides for {uuid}")
+    logger.info(f"get_xiview_peptides for {uuid}, limit: {limit}, after: {after_search_id}/{after_id}")
 
     # cache_key = build_xiview_cache_key("xi2_peptides", project if isinstance(project, str) else ",".join(project))
     # cached = get_cached_response(cache_key)
     # if cached:
     #     return Response(content=cached, media_type='application/json')
 
+    params = [_parse_resultset_ids(uuid)]
+    after = any_after(_cursor_value(after_search_id), _cursor_value(after_id))
+    page = KeysetPage(_PEPTIDE_KEY, after, limit, 0, params)
+    # key filter goes before the GROUP BY so a page only aggregates its own peptides
     #todo - investigate lateral join - potential speed up
-    query = """WITH submatch AS (
-                    SELECT m.pep1_id, m.pep2_id, m.search_id
-                    FROM ResultMatch rm
-                    JOIN match m ON rm.search_id = m.search_id AND rm.match_id = m.id
-                    WHERE rm.resultset_id = ANY($1::uuid[])
-                      AND m.site1 > 0 AND m.site2 > 0
-                      AND rm.top_ranking = TRUE
-                ),
-                pep_ids AS (
-                    SELECT search_id, pep1_id AS pep_id FROM submatch
-                    UNION
-                    SELECT search_id, pep2_id FROM submatch
-                )
+    query = f"""{_pep_ids_cte(page)}
                 SELECT mp.id,
                        mp.search_id AS u_id,
                        mp.sequence AS seq,
@@ -253,14 +334,11 @@ async def get_xiview_peptides(uuid: List[str] = Query(...)):
                        mp.modification_position AS m_ps,
                        array_agg(pp.protein_id) AS prt,
                        array_agg(pp.start) AS pos
-                FROM pep_ids pi
-                INNER JOIN modifiedpeptide mp ON mp.search_id = pi.search_id AND mp.id = pi.pep_id
-                JOIN peptideposition pp ON pp.mod_pep_id = mp.id AND pp.search_id = mp.search_id
-                GROUP BY mp.id, mp.search_id, mp.sequence, mp.modification_ids, mp.modification_position;"""
+                {_PEPTIDES_FROM}{page.filter(conjunction="WHERE")}
+                GROUP BY mp.id, mp.search_id, mp.sequence, mp.modification_ids, mp.modification_position{page.order_limit};"""
 
-    params = [_parse_resultset_ids(uuid)]
     t0 = time.time()
-    records = await execute_query(query, params)
+    records = await execute_query(query, params, no_nested_loops=limit is not None)
     logger.info(f"get_xiview_peptides: query took {time.time()-t0:.2f}s, {len(records)} rows")
     t1 = time.time()
     json_bytes = orjson.dumps([dict(r) for r in records], default=str)
@@ -271,55 +349,68 @@ async def get_xiview_peptides(uuid: List[str] = Query(...)):
 
 @log_execution_time_async
 @xiview_xi2_data_router.get('/get_xiview_proteins', tags=["xiVIEW"])
-async def get_xiview_proteins(uuid: List[str] = Query(...)):
+async def get_xiview_proteins(uuid: List[str] = Query(...),
+                              limit: int = _LIMIT_QUERY,
+                              after_search_id: str = Query(None, description="`search_id` of the last row of the previous page"),
+                              after_id: str = Query(None, description="`id` of the last row of the previous page")):
     """
     Get the proteins referenced by top-ranking matches for the given resultset UUIDs.
 
+    Paging: with `limit`, rows are ordered by (search_id, id); pass those of the last row as
+    after_search_id and after_id to get the next page. The last page has fewer than `limit` rows.
+
     :return: json of the proteins
     """
-    logger.info(f"get_xiview_proteins for {uuid}")
+    logger.info(f"get_xiview_proteins for {uuid}, limit: {limit}, after: {after_search_id}/{after_id}")
 
     # cache_key = build_xiview_cache_key("xi2_proteins", project if isinstance(project, str) else ",".join(project))
     # cached = get_cached_response(cache_key)
     # if cached:
     #     return Response(content=cached, media_type='application/json')
 
-    query = """WITH submatch AS (
-                    SELECT m.pep1_id, m.pep2_id, m.search_id
-                    FROM ResultMatch rm
-                    JOIN match m ON rm.search_id = m.search_id AND rm.match_id = m.id
-                    WHERE rm.resultset_id = ANY($1::uuid[])
-                      AND m.site1 > 0 AND m.site2 > 0
-                      AND rm.top_ranking = TRUE
-                ),
-                pep_ids AS (
-                    SELECT search_id, pep1_id AS pep_id FROM submatch
-                    UNION
-                    SELECT search_id, pep2_id FROM submatch
-                ),
-                protein_ids AS (
-                    SELECT DISTINCT pp.search_id, pp.protein_id
-                    FROM peptideposition pp
-                    JOIN pep_ids pi ON pi.search_id = pp.search_id AND pi.pep_id = pp.mod_pep_id
-                )
+    params = [_parse_resultset_ids(uuid)]
+    after = any_after(_cursor_value(after_search_id), _cursor_value(after_id))
+    page = KeysetPage(_PROTEIN_KEY, after, limit, 0, params)
+    query = f"""{_protein_ids_cte(page)}
                 SELECT p.id,
                        p.name,
                        p.accession,
                        p.sequence,
                        p.search_id,
                        p.is_decoy
-                FROM protein p
-                JOIN protein_ids x ON p.search_id = x.search_id AND p.id = x.protein_id;"""
+                {_PROTEINS_FROM}{page.filter(conjunction="WHERE")}{page.order_limit};"""
 
-    params = [_parse_resultset_ids(uuid)]
     t0 = time.time()
-    records = await execute_query(query, params)
+    records = await execute_query(query, params, no_nested_loops=limit is not None)
     logger.info(f"get_xiview_proteins: query took {time.time()-t0:.2f}s, {len(records)} rows")
     t1 = time.time()
     json_bytes = orjson.dumps([dict(r) for r in records], default=str)
     logger.info(f"get_xiview_proteins: json conversion took {time.time()-t1:.2f}s, {len(json_bytes)/1024:.0f}KB")
     # set_cached_response(cache_key, json_bytes)
     return Response(content=json_bytes, media_type='application/json')
+
+
+@log_execution_time_async
+@xiview_xi2_data_router.get('/get_xiview_counts', tags=["xiVIEW"])
+async def get_xiview_counts(uuid: List[str] = Query(...)):
+    """
+    Get the number of rows get_xiview_matches, get_xiview_peptides and get_xiview_proteins return,
+    so a client loading them in pages can show progress.
+
+    :return: json {"matches": n, "peptides": n, "proteins": n}
+    """
+    logger.info(f"get_xiview_counts for {uuid}")
+    resultset_ids = _parse_resultset_ids(uuid)
+    matches_query = f"SELECT count(*) AS n {_matches_from_where(1)}"
+    peptides_query = f"{_pep_ids_cte()} SELECT count(DISTINCT (mp.search_id, mp.id)) AS n {_PEPTIDES_FROM}"
+    proteins_query = f"{_protein_ids_cte()} SELECT count(*) AS n {_PROTEINS_FROM}"
+    matches, peptides, proteins = await asyncio.gather(
+        execute_query(matches_query, [resultset_ids], fetch_one=True),
+        execute_query(peptides_query, [resultset_ids], fetch_one=True),
+        execute_query(proteins_query, [resultset_ids], fetch_one=True),
+    )
+    return Response(orjson.dumps({"matches": matches['n'], "peptides": peptides['n'], "proteins": proteins['n']}),
+                    media_type='application/json')
 
 
 
