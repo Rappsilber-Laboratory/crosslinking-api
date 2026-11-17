@@ -165,6 +165,70 @@ def build_xiview_cache_key(endpoint: str, project: str, file: Optional[str] = No
     return f"xiview:{endpoint}:{project}"
 
 
+class KeysetPage:
+    """
+    SQL fragments for fetching one page of a query ordered by a unique key (keyset pagination).
+
+    Pages follow each other by passing the key of the last row of one page as `after` for the next,
+    which (unlike OFFSET) gives disjoint pages and doesn't make the database produce and skip the
+    earlier rows. OFFSET is still supported for existing API users. Any page request (limit given)
+    is ordered by the key, so pages are stable between requests.
+
+    Constructing one appends the values for its placeholders to `params`. Then:
+    - filter() gives the "key > after" condition, for the key columns or, with the same placeholders,
+      for other columns holding the same values: in a query that joins CTEs, filtering each CTE by the
+      cursor too keeps Postgres from building the whole result for every page (on DUC-XL-MS peptides,
+      pages got slower the further in they were: 3s for the first, 150s by the sixth);
+    - order_limit goes at the end of the query.
+    Both are "" when there's nothing to add.
+    """
+
+    def __init__(self, key_columns: List[str], after: Optional[List[Any]], limit: Optional[int],
+                 offset: int, params: List[Any]):
+        """
+        :param key_columns: SQL expressions that together uniquely identify a row, e.g. ["si.upload_id", "si.id"]
+        :param after: key values of the last row of the previous page (one per key column), or None for the first page
+        :param limit: max rows per page, or None for no paging (then after must be None and offset 0)
+        :param offset: rows to skip (legacy paging), 0 for none
+        :param params: query params so far; placeholders are numbered after them
+        """
+        self.key_columns = key_columns
+        self.placeholders = None
+        self.order_limit = ""
+        if limit is None:
+            if after is not None or offset:
+                raise HTTPException(status_code=422, detail="after_* and offset need limit")
+            return
+        if after is not None and offset:
+            raise HTTPException(status_code=422, detail="use either after_* or offset, not both")
+        if after is not None:
+            if len(after) != len(key_columns) or any(v is None for v in after):
+                raise HTTPException(status_code=422, detail="all after_* params are needed together")
+            first = len(params) + 1
+            self.placeholders = ", ".join(f"${first + i}" for i in range(len(after)))
+            params.extend(after)
+        self.order_limit = f" ORDER BY {', '.join(key_columns)} LIMIT ${len(params) + 1}"
+        params.append(limit)
+        if offset:
+            self.order_limit += f" OFFSET ${len(params) + 1}"
+            params.append(offset)
+
+    def filter(self, columns: Optional[List[str]] = None, conjunction: str = "AND") -> str:
+        """
+        " <conjunction> (columns) > (after values)", or "" on a first page / without paging.
+        :param columns: columns to compare, default the key columns
+        :param conjunction: keyword joining it to the query ("AND", or "WHERE" if there's no WHERE yet)
+        """
+        if self.placeholders is None:
+            return ""
+        return f" {conjunction} ({', '.join(columns or self.key_columns)}) > ({self.placeholders})"
+
+
+def any_after(*values) -> Optional[List[Any]]:
+    """The after_* query params as a list, or None if none of them were given."""
+    return list(values) if any(v is not None for v in values) else None
+
+
 def log_execution_time_async(func):
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
@@ -236,12 +300,17 @@ def get_api_key(key: str = Security(api_key_header)) -> str:
     )
 
 
-async def execute_query(query: str, params: Optional[List[Any]] = None, fetch_one: bool = False):
+async def execute_query(query: str, params: Optional[List[Any]] = None, fetch_one: bool = False,
+                        no_nested_loops: bool = False):
     """
     Execute a query and return the result
     :param query: the query to execute
     :param params: the parameters to pass to the query
     :param fetch_one: whether to fetch one result or all
+    :param no_nested_loops: run with enable_nestloop off (for this query only). For paged queries whose
+        row estimates go wrong: with stale statistics Postgres can estimate 1 row for a page's cursor
+        range and pick a nested loop that reruns a big join for every row (seen on DUC-XL-MS peptides:
+        a 2s page never finished)
     :return: the result of the query
     """
     if _db_pool is None:
@@ -254,11 +323,12 @@ async def execute_query(query: str, params: Optional[List[Any]] = None, fetch_on
                 decoder=json.loads,
                 schema='pg_catalog'
             )
-            if fetch_one:
-                result = await conn.fetchrow(query, *(params or []))
-            else:
-                result = await conn.fetch(query, *(params or []))
-            return result
+            fetch = conn.fetchrow if fetch_one else conn.fetch
+            if no_nested_loops:
+                async with conn.transaction():  # SET LOCAL lasts until the end of the transaction
+                    await conn.execute("SET LOCAL enable_nestloop = off")
+                    return await fetch(query, *(params or []))
+            return await fetch(query, *(params or []))
 
     except asyncio.TimeoutError:
         logger.error(
