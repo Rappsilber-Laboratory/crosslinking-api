@@ -51,8 +51,8 @@ class TableNamesEnum(str, Enum):
 
 @parser_router.post("/write_data", tags=["Parser"], response_model=None)
 async def write_data(
-        table: TableNamesEnum = Body(..., description="table name", embeded=True),
-        data=Body(..., description="table data", embeded=True),
+        table: TableNamesEnum = Body(..., description="table name"),
+        data=Body(..., description="table data"),
         api_key: str = Security(get_api_key),
         session: Session = Depends(get_session)) -> None:
     """
@@ -93,7 +93,7 @@ async def write_data(
 
 @parser_router.post("/write_new_upload", tags=["Parser"])
 def write_new_upload(
-        data: dict = Body(..., description="table data", embeded=True),
+        data: dict = Body(..., description="table data"),
         api_key: str = Security(get_api_key),
         session: Session = Depends(get_session)):
     try:
@@ -115,12 +115,12 @@ def write_new_upload(
 
 
 @parser_router.post("/write_mzid_info", tags=["Parser"])
-def write_mzid_info(analysis_software_list=Body(..., embeded=True),
-                    spectra_formats=Body(..., embeded=True),
-                    provider=Body(..., embeded=True),
-                    audits=Body(..., embeded=True),
-                    samples=Body(..., embeded=True),
-                    bib=Body(..., embeded=True),
+def write_mzid_info(analysis_software_list=Body(...),
+                    spectra_formats=Body(...),
+                    provider=Body(...),
+                    audits=Body(...),
+                    samples=Body(...),
+                    bib=Body(...),
                     upload_id: int = Query(default=None),
                     api_key: str = Security(get_api_key),
                     session: Session = Depends(get_session)):
@@ -152,8 +152,8 @@ def write_mzid_info(analysis_software_list=Body(..., embeded=True),
 
 
 @parser_router.post("/write_other_info", tags=["Parser"])
-def write_other_info(contains_crosslinks=Body(..., description="contains_crosslinks", embeded=True),
-                     upload_warnings=Body(..., description="upload_warnings", embeded=True),
+def write_other_info(contains_crosslinks=Body(..., description="contains_crosslinks"),
+                     upload_warnings=Body(..., description="upload_warnings"),
                      upload_id: int = None,
                      api_key: str = Security(get_api_key),
                      session: Session = Depends(get_session)):
