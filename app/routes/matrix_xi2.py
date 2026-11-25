@@ -4,7 +4,8 @@ Data for the XL-MS adjacency matrix viewer (student project), read from the xi2 
 Two endpoints, mirroring the viewer's two input files:
   /matches   - one row per top-ranking crosslinked CSM, shaped like the viewer's CSV input
                (Protein1, Protein2, Score, Decoy1, Decoy2, SeqPos1, SeqPos2)
-  /sequences - {accession: sequence} for the target proteins those matches touch (its FASTA input)
+  /sequences - {accession: sequence} for the target and decoy proteins those matches touch
+               (its FASTA input)
 """
 import logging
 import random
@@ -127,8 +128,13 @@ async def get_matrix_matches(uuid: List[str] = Query(...),
 @matrix_xi2_router.get('/sequences', tags=["Matrix"])
 async def get_matrix_sequences(uuid: List[str] = Query(...)):
     """
-    {accession: sequence} for the target proteins referenced by top-ranking crosslinked matches.
-    Decoys are left out, as in a FASTA file, so the viewer doesn't fill in decoy residues.
+    {accession: sequence} for the target and decoy proteins referenced by top-ranking crosslinked
+    matches.
+
+    xi2 stores a decoy accession several times: once with the full-length decoy sequence and
+    again with short fragments, and a match's peptide may point at a fragment. So the decoys'
+    sequences are looked up again by accession (within their search) and the longest is sent.
+    Two queries instead of one join, since protein has no index on accession.
     """
     logger.info(f"get_matrix_sequences for {uuid}")
     query = """WITH submatch AS (
@@ -144,11 +150,22 @@ async def get_matrix_sequences(uuid: List[str] = Query(...)):
                     UNION
                     SELECT search_id, pep2_id FROM submatch
                 )
-                SELECT DISTINCT p.accession, p.sequence
+                SELECT DISTINCT p.search_id, p.accession, p.sequence, p.is_decoy
                 FROM pep_ids pi
                 JOIN peptideposition pp ON pp.search_id = pi.search_id AND pp.mod_pep_id = pi.pep_id
-                JOIN protein p ON p.search_id = pp.search_id AND p.id = pp.protein_id
-                WHERE NOT p.is_decoy;"""
+                JOIN protein p ON p.search_id = pp.search_id AND p.id = pp.protein_id;"""
     records = await execute_query(query, [_parse_resultset_ids(uuid)])
-    sequences = {r['accession']: (r['sequence'] or '').upper() for r in records}
+    sequences = {r['accession']: (r['sequence'] or '').upper() for r in records if not r['is_decoy']}
+
+    decoys = list({(r['search_id'], r['accession']) for r in records if r['is_decoy']})
+    if decoys:
+        decoy_query = """SELECT p.accession, p.sequence
+                         FROM protein p
+                         JOIN unnest($1::uuid[], $2::text[]) AS d(search_id, accession)
+                           ON p.search_id = d.search_id AND p.accession = d.accession
+                         WHERE p.is_decoy;"""
+        for r in await execute_query(decoy_query, [[s for s, _ in decoys], [a for _, a in decoys]]):
+            seq = (r['sequence'] or '').upper()
+            if len(seq) > len(sequences.get(r['accession'], '')):
+                sequences[r['accession']] = seq
     return Response(content=orjson.dumps(sequences), media_type='application/json')
